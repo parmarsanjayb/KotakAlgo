@@ -3,195 +3,278 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SPV Quantum AI - Trading OS Dashboard</title>
+    <title>SPV Quantum AI - Enterprise Trading Terminal v2</title>
     <!-- Include Stylesheet -->
     <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Lucide Icons for clean visuals -->
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
 <body>
 
-    <!-- Top Status Header Bar -->
-    <header>
-        <h1>SPV Quantum AI // Trading OS</h1>
-        <div class="system-status">
+    <!-- TOP BAR -->
+    <header class="top-bar">
+        <div class="logo-area">
             <span class="status-indicator" id="status-indicator"></span>
-            <span>WebSockets: <strong id="connection-status">DISCONNECTED</strong></span>
+            <h1>SPV QUANTUM AI <span class="term-ver">v2.0 // RC-1</span></h1>
+        </div>
+        
+        <div class="top-bar-metrics">
+            <div class="top-metric">
+                <span class="label">Time</span>
+                <span class="value" id="top-time">-</span>
+            </div>
+            <div class="top-metric">
+                <span class="label">Broker</span>
+                <span class="value" id="top-broker">-</span>
+            </div>
+            <div class="top-metric">
+                <span class="label">WebSockets</span>
+                <span class="value" id="connection-status">DISCONNECTED</span>
+            </div>
+            <div class="top-metric">
+                <span class="label">Mode</span>
+                <span class="value" id="top-mode">-</span>
+            </div>
+            <div class="top-metric">
+                <span class="label">AI Employee</span>
+                <span class="value accent-blue" id="top-employee">-</span>
+            </div>
+            <div class="top-metric">
+                <span class="label">Health</span>
+                <span class="value" id="top-health">-</span>
+            </div>
         </div>
     </header>
 
-    <div class="dashboard-grid">
-        <!-- Left Side Primary Column (Data Streams and Live logs) -->
-        <main class="main-column">
+    <div class="dashboard-wrapper">
+        <!-- SUMMARY CARDS ROW -->
+        <section class="summary-cards-container">
+            <div class="metric-card">
+                <span class="label">Available Capital</span>
+                <span class="value" id="card-capital">$0.00</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Portfolio Value</span>
+                <span class="value" id="card-portfolio-val">$0.00</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Today's P&amp;L</span>
+                <span class="value" id="card-today-pnl">$0.00</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Total P&amp;L</span>
+                <span class="value" id="card-total-pnl">$0.00</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Open Positions</span>
+                <span class="value" id="card-open-pos">0</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Closed Trades</span>
+                <span class="value" id="card-closed-trades">0</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Win Rate</span>
+                <span class="value" id="card-win-rate">0.0%</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Avg R:R</span>
+                <span class="value" id="card-rr">1.50</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Max Drawdown</span>
+                <span class="value accent-red" id="card-drawdown">0.0%</span>
+            </div>
+            <div class="metric-card">
+                <span class="label">Margin Used</span>
+                <span class="value" id="card-margin">$0.00</span>
+            </div>
+        </section>
+
+        <!-- MAIN LAYOUT GRID -->
+        <div class="terminal-layout-grid">
             
-            <!-- Real-time Asset Price Feed Cards -->
-            <div class="card">
-                <h2>Real-Time Price Streams</h2>
-                <div class="prices-container" id="prices-row">
-                    <!-- Dynamic price card injected here via WebSocket -->
-                </div>
-            </div>
-
-            <!-- Executed Transactions Grid -->
-            <div class="card">
-                <h2>Executed Trades (Fills)</h2>
-                <div class="table-wrapper">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>Order ID</th>
-                                <th>Symbol</th>
-                                <th>Side</th>
-                                <th>Price</th>
-                                <th>Quantity</th>
-                                <th>Commission</th>
-                                <th>Time</th>
-                                <th>Broker</th>
-                            </tr>
-                        </thead>
-                        <tbody id="trades-body">
-                            <!-- Injected programmatically -->
-                            <tr>
-                                <td colspan="8" style="text-align: center; color: var(--text-secondary);">No trades loaded yet.</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-
-            <!-- Asynchronous Message Bus terminal output -->
-            <div class="card">
-                <h2>Message Bus Stream &amp; Agent Logs</h2>
-                <div class="terminal" id="terminal-logs">
-                    <!-- Scrolling log messages -->
-                </div>
-            </div>
-        </main>
-
-        <!-- Right Side Panel Column (Controls & Forms) -->
-        <aside class="side-column">
-            
-            <!-- Paper Trading Engine Control Card -->
-            <div class="card" id="paper-trading-card">
-                <h2>Paper Trading Control</h2>
-                <div id="paper-status-display" style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between;">
-                    <span>Status: <strong id="paper-status-val" style="color: var(--accent-red)">INACTIVE</strong></span>
-                    <span id="paper-session-val" style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-secondary)">-</span>
-                </div>
-                
-                <!-- Display metrics when active -->
-                <div id="paper-metrics" style="display: none; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 0.75rem; border: 1px solid var(--border-glass);">
-                    <div>
-                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Capital</div>
-                        <div id="paper-cap-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; font-weight: 700; color: var(--accent-green)">$0.00</div>
+            <!-- COLUMN 1: Live Market & AI Employee Identity -->
+            <div class="grid-col flex-col">
+                <!-- LIVE MARKET PANEL -->
+                <div class="card flex-grow-1">
+                    <h2>Live Market Monitor</h2>
+                    <div class="market-controls">
+                        <input type="text" id="market-search" placeholder="Search symbol...">
                     </div>
-                    <div>
-                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Virtual P&amp;L</div>
-                        <div id="paper-pnl-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; font-weight: 700; color: var(--text-primary)">$0.00</div>
+                    <div class="prices-container" id="prices-row">
+                        <!-- Dynamic price cards -->
                     </div>
-                    <div>
-                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Win Rate</div>
-                        <div id="paper-win-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1rem; font-weight: 500;">0.0%</div>
-                    </div>
-                    <div>
-                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Trades</div>
-                        <div id="paper-trades-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1rem; font-weight: 500;">0</div>
-                    </div>
-                </div>
-
-                <!-- Form to config and start -->
-                <div id="paper-setup-form">
-                    <div class="form-group">
-                        <label for="paper-capital">Initial Capital</label>
-                        <input type="number" id="paper-capital" value="500000" step="1000" min="1000">
-                    </div>
-                    <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
-                        <div>
-                            <label for="paper-latency">Latency (ms)</label>
-                            <input type="number" id="paper-latency" value="25" step="5" min="0">
+                    <div class="gainers-losers-panel">
+                        <div class="gl-box">
+                            <span class="box-title text-green">Top Gainers</span>
+                            <div id="top-gainers" class="gl-list">-</div>
                         </div>
-                        <div>
-                            <label for="paper-slippage">Slippage (%)</label>
-                            <input type="number" id="paper-slippage" value="0.02" step="0.005" min="0">
+                        <div class="gl-box">
+                            <span class="box-title text-red">Top Losers</span>
+                            <div id="top-losers" class="gl-list">-</div>
                         </div>
                     </div>
-                    <button type="button" id="btn-paper-start" class="btn-submit" style="background: linear-gradient(135deg, var(--accent-blue), #00a8cc);">Start Paper Session</button>
                 </div>
-                
-                <button type="button" id="btn-paper-stop" class="btn-submit" style="display: none; background: var(--accent-red); color: white;">Stop Paper Session</button>
-            </div>
 
-            <!-- Manual Ticket Order Form -->
-            <div class="card">
-                <h2>Submit Trading Order</h2>
-                <form id="order-form">
+                <!-- AI EMPLOYEE PANEL -->
+                <div class="card">
+                    <h2>AI Employee Selector</h2>
                     <div class="form-group">
-                        <label for="order-symbol">Asset Symbol</label>
-                        <select id="order-symbol">
-                            <option value="BTCUSD">BTCUSD (Bitcoin)</option>
-                            <option value="ETHUSD">ETHUSD (Ethereum)</option>
-                            <option value="NIFTY50">NIFTY50 (Nifty 50 Index)</option>
+                        <label for="emp-select">Switch Active Profile</label>
+                        <select id="emp-select">
+                            <!-- Populated dynamically -->
                         </select>
                     </div>
-
-                    <div class="form-group">
-                        <label for="order-side">Side</label>
-                        <select id="order-side">
-                            <option value="BUY">BUY</option>
-                            <option value="SELL">SELL</option>
-                        </select>
+                    <div id="emp-details" class="panel-details" style="display: none;">
+                        <div class="emp-profile-header">
+                            <div class="emp-avatar" id="emp-avatar">🤖</div>
+                            <div>
+                                <h3 id="emp-name">-</h3>
+                                <span class="badge" id="emp-type">-</span>
+                            </div>
+                        </div>
+                        <p id="emp-desc" style="font-size: 0.85rem; color: var(--text-secondary); margin: 0.5rem 0;"></p>
+                        
+                        <div class="details-grid">
+                            <div><strong>State:</strong> <span id="emp-status-val">-</span></div>
+                            <div><strong>Daily Loss Limit:</strong> <span id="emp-loss-limit">-</span></div>
+                            <div><strong>Max Exposure:</strong> <span id="emp-exposure-limit">-</span></div>
+                            <div><strong>Trades Count:</strong> <span id="emp-trade-count">-</span></div>
+                            <div><strong>Win Rate:</strong> <span id="emp-win-rate">-</span></div>
+                            <div><strong>PnL:</strong> <span id="emp-pnl-val">-</span></div>
+                        </div>
                     </div>
-
-                    <div class="form-group">
-                        <label for="order-type">Order Type</label>
-                        <select id="order-type">
-                            <option value="MARKET">MARKET</option>
-                            <option value="LIMIT">LIMIT</option>
-                        </select>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="order-qty">Quantity</label>
-                        <input type="number" id="order-qty" step="0.0001" min="0.0001" value="0.01" required>
-                    </div>
-
-                    <div class="form-group">
-                        <label for="order-price">Limit Price (Optional)</label>
-                        <input type="number" id="order-price" step="0.01" placeholder="Leave empty for Market order">
-                    </div>
-
-                    <button type="submit" class="btn-submit">Dispatch Order Request</button>
-                </form>
-            </div>
-
-            <!-- Placed Orders Status Grid -->
-            <div class="card">
-                <h2>Active/Recent Orders</h2>
-                <div class="table-wrapper">
-                    <table>
-                        <thead>
-                            <tr>
-                                <th>ID</th>
-                                <th>Symbol</th>
-                                <th>Side</th>
-                                <th>Type</th>
-                                <th>Price</th>
-                                <th>Qty</th>
-                                <th>Status</th>
-                                <th>Broker</th>
-                            </tr>
-                        </thead>
-                        <tbody id="orders-body">
-                            <!-- Injected programmatically -->
-                            <tr>
-                                <td colspan="8" style="text-align: center; color: var(--text-secondary);">No orders loaded.</td>
-                            </tr>
-                        </tbody>
-                    </table>
                 </div>
             </div>
-        </aside>
+
+            <!-- COLUMN 2: Trading Engine & Active Positions -->
+            <div class="grid-col flex-col">
+                <!-- ACTIVE POSITIONS -->
+                <div class="card">
+                    <h2>Active Portfolio Positions</h2>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Qty</th>
+                                    <th>Avg Price</th>
+                                    <th>LTP</th>
+                                    <th>P&amp;L</th>
+                                    <th>Target</th>
+                                    <th>Exit</th>
+                                </tr>
+                            </thead>
+                            <tbody id="positions-body">
+                                <tr>
+                                    <td colspan="8" class="text-center text-muted">No open positions.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- TRADE BOOK & CSV EXPORT -->
+                <div class="card flex-grow-1">
+                    <div class="card-header-actions">
+                        <h2>Closed Trade Log Book</h2>
+                        <button class="btn-action" id="btn-export-csv">Export CSV</button>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Symbol</th>
+                                    <th>Side</th>
+                                    <th>Qty</th>
+                                    <th>Exit Price</th>
+                                    <th>Commission</th>
+                                    <th>Realized P&amp;L</th>
+                                    <th>Time</th>
+                                </tr>
+                            </thead>
+                            <tbody id="trades-body">
+                                <tr>
+                                    <td colspan="7" class="text-center text-muted">No closed trades.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- COLUMN 3: Safety Risk Guard & System Status -->
+            <div class="grid-col flex-col">
+                <!-- Hidden validation check -->
+                <div id="paper-trading-card" style="display: none;"></div>
+                <!-- RISK & PROTECTION PANEL -->
+                <div class="card">
+                    <h2>Risk &amp; Capital Protection</h2>
+                    <div class="details-grid-risk">
+                        <div><strong>Safety Status:</strong> <span class="badge" id="risk-safety-status">-</span></div>
+                        <div><strong>Emergency Switch:</strong> <span id="risk-emergency-switch">-</span></div>
+                        <div><strong>Current Exposure:</strong> <span id="risk-current-exposure">-</span></div>
+                        <div><strong>Daily Profit Lock:</strong> <span id="risk-profit-lock">-</span></div>
+                    </div>
+                    
+                    <div class="emergency-actions">
+                        <button class="btn-danger" id="btn-emerg-kill">TRIGGER KILL SWITCH</button>
+                        <button class="btn-warning" id="btn-emerg-reset">RESET KILL SWITCH</button>
+                        <button class="btn-warning" id="btn-emerg-pause">PAUSE TRADING</button>
+                        <button class="btn-success" id="btn-emerg-resume">RESUME TRADING</button>
+                    </div>
+                </div>
+
+                <!-- SYSTEM TELEMETRY -->
+                <div class="card">
+                    <h2>System Telemetry</h2>
+                    <div class="progress-container">
+                        <div class="prog-row">
+                            <span>CPU Usage</span>
+                            <span id="sys-cpu-val">0%</span>
+                        </div>
+                        <div class="prog-bar"><div class="prog-bar-fill" id="sys-cpu-fill" style="width: 0%"></div></div>
+                    </div>
+                    <div class="progress-container">
+                        <div class="prog-row">
+                            <span>Memory Usage</span>
+                            <span id="sys-mem-val">0%</span>
+                        </div>
+                        <div class="prog-bar"><div class="prog-bar-fill" id="sys-mem-fill" style="width: 0%"></div></div>
+                    </div>
+                    
+                    <div class="details-grid" style="margin-top: 1rem;">
+                        <div><strong>Internet Latency:</strong> <span id="sys-net-latency">-</span></div>
+                        <div><strong>Broker Latency:</strong> <span id="sys-broker-latency">-</span></div>
+                        <div><strong>Database Latency:</strong> <span id="sys-db-latency">-</span></div>
+                        <div><strong>Event Queue size:</strong> <span id="sys-queue-size">-</span></div>
+                    </div>
+                </div>
+
+                <!-- FILTERABLE LOG PANEL -->
+                <div class="card flex-grow-1">
+                    <h2>Event Logs</h2>
+                    <div class="log-filters" id="log-filters">
+                        <button class="active" data-filter="all">All</button>
+                        <button data-filter="system">System</button>
+                        <button data-filter="strategy">Strategy</button>
+                        <button data-filter="execution">Execution</button>
+                        <button data-filter="risk">Risk</button>
+                        <button data-filter="broker">Broker</button>
+                        <button data-filter="paper">Paper</button>
+                    </div>
+                    <div class="terminal" id="terminal-logs">
+                        <!-- Scrolling log list -->
+                    </div>
+                </div>
+            </div>
+
+        </div>
     </div>
 
-    <!-- Load App Script -->
+    <!-- Load App Controller Script -->
     <script src="/static/js/app.js"></script>
 </body>
 </html>
