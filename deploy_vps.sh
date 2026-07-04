@@ -30,7 +30,7 @@ echo "5. Setting up Python virtual environment..."
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
-pip install flask pyotp requests pandas numpy "git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git#egg=neo_api_client"
+pip install -r spv-quantum-ai/requirements.txt
 
 # 6. Create systemd Service file for background daemonization
 echo "6. Configuring background service (kotakalgo.service)..."
@@ -42,7 +42,8 @@ After=network.target
 [Service]
 User=root
 WorkingDirectory=/var/www/KotakAlgo
-ExecStart=/var/www/KotakAlgo/venv/bin/python app.py
+Environment=PYTHONPATH=/var/www/KotakAlgo/spv-quantum-ai
+ExecStart=/var/www/KotakAlgo/venv/bin/python -m uvicorn dashboard.main:app --host 127.0.0.1 --port 8000
 Restart=always
 
 [Install]
@@ -63,10 +64,12 @@ server {
     server_name _;
 
     location / {
-        proxy_pass http://127.0.0.1:5000;
+        proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "Upgrade";
         proxy_read_timeout 300s;
         proxy_connect_timeout 300s;
     }
