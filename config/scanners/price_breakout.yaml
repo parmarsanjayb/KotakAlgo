@@ -1,0 +1,7 @@
+enabled: true
+filter_type: PriceBreakout
+name: PriceBreakoutScanner
+params:
+  bandwidth_threshold: 4.0
+priority: 2
+segment: Equity

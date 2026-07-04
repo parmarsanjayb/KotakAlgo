@@ -1,0 +1,58 @@
+system:
+  name: "SPV Quantum AI"
+  version: "1.0.0"
+
+agents:
+  market_agent:
+    enabled: true
+    tick_interval_ms: 1000
+  risk_agent:
+    enabled: true
+    check_interval_ms: 5000
+  execution_agent:
+    enabled: true
+    retry_attempts: 3
+    retry_delay_sec: 1
+  telegram_notifier:
+    enabled: true
+  market_intelligence_agent:
+    enabled: true
+  chief_decision_agent:
+    enabled: true
+
+brokers:
+  active: paper_broker
+  paper_broker:
+    enabled: true
+    initial_balance: 1000000.0
+    commission_rate: 0.0003
+    rejection_rate: 0.02
+    partial_fill_rate: 0.05
+    margin_multiplier: 5.0
+  kotak_neo:
+    enabled: false
+    client_id: ""
+    api_key: ""
+
+risk_limits:
+  max_drawdown_percent: 5.0
+  max_position_size_usd: 10000.0
+  max_open_orders: 10
+  daily_loss_limit_usd: 500.0
+  cooldown_period_minutes: 30
+
+telegram:
+  send_alerts: true
+  send_trades: true
+  send_performance_daily: true
+
+decision_scoring:
+  weights:
+    market_analysis: 0.30
+    market_regime: 0.20
+    strategy_match: 0.25
+    risk_status: 0.25
+  min_confidence_threshold: 60.0
+  bonus_aligned_signals: 5.0
+  penalty_conflicting_signals: 15.0
+

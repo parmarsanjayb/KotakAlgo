@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kotak Neo Algo Trading Console</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <meta name="theme-color" content="#060913">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="/static/icon-192.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <!-- LEFT SIDE SIDEBAR NAVIGATION -->
+    <div class="sidebar">
+        <div class="logo-area">
+            <span>📈</span> Kotak Neo Algo
+        </div>
+        <div class="sidebar-menu">
+            <button class="sidebar-btn active" id="menu-btn-live-feed" onclick="switchTab('live-feed')">📊 Nifty Options Console</button>
+            <button class="sidebar-btn" id="menu-btn-backtest" onclick="switchTab('backtest')">🧪 Strategy Backtester</button>
+            <a href="/settings" class="sidebar-btn">⚙️ Settings & API Credentials</a>
+            <button class="sidebar-btn" id="menu-btn-logs" onclick="switchTab('logs')">🖥️ Console Logs</button>
+        </div>
+        <div class="sidebar-footer">
+            {% if sdk_available %}
+                <span class="sdk-badge sdk-online" style="text-align: center;">SDK Connected</span>
+            {% else %}
+                <span class="sdk-badge sdk-offline" style="text-align: center;">Paper Simulation</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- RIGHT SIDE MAIN CONTENT AREA -->
+    <div class="content-area">
+        <!-- Top Control Bar (Always visible) -->
+        <div class="card" style="padding: 16px 26px; margin-bottom: 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+                <span style="font-weight: 800; font-size: 1.1rem; display: flex; align-items: center; gap: 8px;">
+                    🤖 Bot Control:
+                    <span id="bot-status-pill" class="status-pill status-stopped">STOPPED</span>
+                </span>
+                <span id="env-status-badge" class="status-pill" style="font-weight: 800; font-size: 0.82rem; padding: 4px 10px; border-radius: 6px; text-transform: uppercase;">PAPER</span>
+                <button id="toggle-bot-btn" class="btn btn-success" onclick="toggleBot()" style="padding: 8px 16px; font-size: 0.82rem; border-radius: 8px;">
+                    ▶️ Start Algo Bot
+                </button>
+                <button class="btn btn-secondary" onclick="resetSimulation()" style="padding: 8px 16px; font-size: 0.82rem; border-radius: 8px;">
+                    🔄 Reset P&L & Logs
+                </button>
+            </div>
+            
+            <div style="display: flex; gap: 30px; align-items: center;">
+                <div style="display: flex; flex-direction: column;">
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Virtual Balance</span>
+                    <strong id="val-balance" style="font-size: 1.15rem; color: var(--text-primary);">₹{{ "%.2f"|format(settings.virtual_balance) }}</strong>
+                </div>
+                <div style="display: flex; flex-direction: column;">
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Current Equity</span>
+                    <strong id="val-equity" style="font-size: 1.15rem; color: var(--text-primary);">₹{{ "%.2f"|format(settings.virtual_balance) }}</strong>
+                </div>
+                <div style="display: flex; flex-direction: column; min-width: 100px;">
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Live Unrealized P&L</span>
+                    <strong id="val-live-pnl" style="font-size: 1.15rem; color: var(--text-secondary);">₹0.00</strong>
+                </div>
+                <div style="display: flex; flex-direction: column;">
+                    <span style="font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Daily SL Limit</span>
+                    <strong id="val-sl-hits" style="font-size: 1.15rem; color: var(--neon-red);">{{ settings.sl_hits_count }} / {{ settings.max_daily_sl if settings.max_daily_sl is not none else 3 }}</strong>
+                </div>
+            </div>
+        </div>
+
+        <!-- Global Active Open Positions Table (Always visible when active) -->
+        <div class="card" id="global-active-positions-card" style="display: none; border: 1.5px solid rgba(16, 185, 129, 0.4); background: rgba(6, 15, 30, 0.85); box-shadow: 0 8px 32px rgba(16, 185, 129, 0.08); margin-bottom: 24px;">
+            <div class="card-title" style="border-bottom: 1px solid var(--border-color); padding-bottom: 14px; margin-bottom: 18px; display: flex; justify-content: space-between; align-items: center;">
+                <span style="display: flex; align-items: center; gap: 10px;">
+                    <span style="color: var(--neon-green); font-size: 1.2rem; animation: pulse 1.8s infinite;">🟢</span>
+                    <span style="font-weight: 800; letter-spacing: -0.02em;">Live Open Positions (લાઈવ ઓપન પોઝિશન્સ)</span>
+                </span>
+                <span style="font-size: 0.8rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Auto-Refreshing every 3s</span>
+            </div>
+            <div style="overflow-x: auto; padding: 0 10px;">
+                <table style="width: 100%; border-collapse: collapse;">
+                    <thead>
+                        <tr style="border-bottom: 1.5px solid var(--border-color);">
+                            <th style="padding: 12px 10px;">Ticker</th>
+                            <th style="padding: 12px 10px;">Strategy</th>
+                            <th style="padding: 12px 10px;">Type</th>
+                            <th style="padding: 12px 10px;">Qty</th>
+                            <th style="padding: 12px 10px;">Entry Price</th>
+                            <th style="padding: 12px 10px;">Live Price</th>
+                            <th style="padding: 12px 10px;">Stop Loss</th>
+                            <th style="padding: 12px 10px;">Target</th>
+                            <th style="padding: 12px 10px;">P&L (₹)</th>
+                            <th style="padding: 12px 10px; text-align: center;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="global-active-positions-body">
+                        <!-- Dynamic rows will go here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- TAB 1: NIFTY OPTIONS & CONSOLE -->
+        <div id="tab-live-feed" class="tab-content active">
+            <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: 24px; align-items: start;">
+                <!-- Left Panel: Live Feed & Manual Trades -->
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <!-- Live Feed Display -->
+                    <div class="card" id="options-feed-card">
+                        <div class="card-title">📈 Live Index & Options Feed</div>
+                        <div style="display: flex; flex-direction: column; gap: 24px;">
+                            <!-- Nifty Section -->
+                            <div style="border-bottom: 1px solid var(--border-color); padding-bottom: 20px;">
+                                <h4 onclick="loadChart('NIFTY50')" style="margin: 0 0 12px 0; color: var(--text-primary); display: flex; justify-content: space-between; font-size: 1.1rem; cursor: pointer; user-select: none;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                                    <span>NIFTY 50 Spot 📊</span>
+                                    <span id="ticker-nifty" style="color: var(--neon-green); font-weight: 800;">₹23,366.70</span>
+                                </h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                    <div class="metric-card" style="padding: 14px; border-left: 4px solid var(--neon-green); text-align: left; background: rgba(16, 185, 129, 0.02);">
+                                        <div class="metric-label" id="opt-nifty-ce-name" style="font-size: 0.72rem;">NIFTY CE Option</div>
+                                        <div class="metric-value" id="opt-nifty-ce-price" style="font-size: 1.25rem; font-weight: 800;">₹120.00</div>
+                                    </div>
+                                    <div class="metric-card" style="padding: 14px; border-left: 4px solid var(--neon-red); text-align: left; background: rgba(239, 68, 68, 0.02);">
+                                        <div class="metric-label" id="opt-nifty-pe-name" style="font-size: 0.72rem;">NIFTY PE Option</div>
+                                        <div class="metric-value" id="opt-nifty-pe-price" style="font-size: 1.25rem; font-weight: 800;">₹120.00</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Bank Nifty Section -->
+                            <div>
+                                <h4 onclick="loadChart('BANKNIFTY')" style="margin: 0 0 12px 0; color: var(--text-primary); display: flex; justify-content: space-between; font-size: 1.1rem; cursor: pointer; user-select: none;" onmouseover="this.style.opacity='0.85'" onmouseout="this.style.opacity='1'">
+                                    <span>BANKNIFTY Spot 📊</span>
+                                    <span id="ticker-banknifty" style="color: var(--neon-green); font-weight: 800;">₹54,496.25</span>
+                                </h4>
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+                                    <div class="metric-card" style="padding: 14px; border-left: 4px solid var(--neon-green); text-align: left; background: rgba(16, 185, 129, 0.02);">
+                                        <div class="metric-label" id="opt-bank-ce-name" style="font-size: 0.72rem;">BANKNIFTY CE Option</div>
+                                        <div class="metric-value" id="opt-bank-ce-price" style="font-size: 1.25rem; font-weight: 800;">₹250.00</div>
+                                    </div>
+                                    <div class="metric-card" style="padding: 14px; border-left: 4px solid var(--neon-red); text-align: left; background: rgba(239, 68, 68, 0.02);">
+                                        <div class="metric-label" id="opt-bank-pe-name" style="font-size: 0.72rem;">BANKNIFTY PE Option</div>
+                                        <div class="metric-value" id="opt-bank-pe-price" style="font-size: 1.25rem; font-weight: 800;">₹250.00</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Manual Order execution panel -->
+                    <div class="card" style="border: 1px dashed rgba(250, 204, 21, 0.3); background: rgba(20, 20, 30, 0.65);">
+                        <div class="card-title" style="color: #facc15; margin-bottom: 12px;">
+                            ⚡ Manual Order Execution (મેન્યુઅલ ટ્રેડિંગ)
+                        </div>
+                        <form id="manual-trade-form-index" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); gap: 12px; align-items: end;">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Asset Type</label>
+                                <select id="mt_index_trade_type" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem;" onchange="toggleManualTradeFields('mt_index')">
+                                    <option value="OPTION">Option (ઓપ્શન)</option>
+                                    <option value="EQUITY">Equity (શેર)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Ticker / Symbol</label>
+                                <input type="text" id="mt_index_ticker" value="NIFTY50" placeholder="e.g. NIFTY50" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem; text-transform: uppercase;" required>
+                            </div>
+                            <div class="form-group" id="mt_index_option_type_group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Option Type</label>
+                                <select id="mt_index_option_type" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem;">
+                                    <option value="CE">CALL (CE)</option>
+                                    <option value="PE">PUT (PE)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Qty (Optional)</label>
+                                <input type="number" id="mt_index_qty" placeholder="Default Qty" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem;">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0; display: flex; gap: 8px;">
+                                <button type="button" class="btn btn-success" onclick="submitManualOrder('BUY', 'mt_index')" style="flex: 1; padding: 0; height: 34px; font-size: 0.8rem; background: #22c55e; border-radius: 6px;">BUY</button>
+                                <button type="button" class="btn btn-danger" onclick="submitManualOrder('SELL', 'mt_index')" style="flex: 1; padding: 0; height: 34px; font-size: 0.8rem; background: #ef4444; border-radius: 6px;">SELL</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Right Panel: Option Segment Configurations and Charting -->
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <!-- Segment Configuration -->
+                    <div class="card" style="border: 1px solid rgba(99, 102, 241, 0.35); background: rgba(13, 20, 38, 0.75);">
+                        <div class="card-title" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <span>⚙️ Options Segment Config (ઓપ્શન સેટિંગ્સ)</span>
+                            <label class="switch-container" style="display: inline-flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="options-segment-active" onchange="saveSegmentConfig('options')" style="width: 18px; height: 18px; cursor: pointer;">
+                                <span id="options-active-label" style="font-weight: 800; font-size: 0.85rem; text-transform: uppercase; color: var(--text-secondary);">INACTIVE</span>
+                            </label>
+                        </div>
+                        <form id="options-segment-form" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; align-items: end;">
+                            <input type="hidden" name="segment" value="options">
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Strategy</label>
+                                <select name="strategy_type" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem; background: rgba(0,0,0,0.3);">
+                                    <option value="SMA_CROSSOVER">EMA Crossover</option>
+                                    <option value="SUPERTREND_ONLY">Supertrend Only</option>
+                                    <option value="COMBINED">Combined (All Filters)</option>
+                                    <option value="SUPERTREND_RSI_MACD">Supertrend+RSI+MACD</option>
+                                    <option value="RSI_ONLY">RSI Only</option>
+                                    <option value="MACD_ONLY">MACD Only</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Assets</label>
+                                <select name="assets" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem; background: rgba(0,0,0,0.3);">
+                                    <option value="NIFTY50">NIFTY50 Only</option>
+                                    <option value="BANKNIFTY">BANKNIFTY Only</option>
+                                    <option value="NIFTY50,BANKNIFTY">Both (Nifty & BankNifty)</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Lot Size / Qty</label>
+                                <input type="number" name="qty_lot" value="65" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem; background: rgba(0,0,0,0.3);">
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Option Type</label>
+                                <select name="option_type" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem; background: rgba(0,0,0,0.3);">
+                                    <option value="BOTH">CE & PE (Both)</option>
+                                    <option value="CE">CE Only</option>
+                                    <option value="PE">PE Only</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="margin-bottom: 0;">
+                                <label style="font-size: 0.75rem; color: var(--text-secondary); margin-bottom: 4px;">Strike Selection</label>
+                                <select name="strike_selection" class="form-control" style="padding: 4px 10px; height: 34px; font-size: 0.82rem; background: rgba(0,0,0,0.3);">
+                                    <option value="ATM">ATM (At The Money)</option>
+                                    <option value="ITM">ITM (In The Money)</option>
+                                    <option value="OTM">OTM (Out of The Money)</option>
+                                </select>
+                            </div>
+                            <button type="button" class="btn btn-gradient" onclick="saveSegmentConfig('options')" style="height: 34px; padding: 0; font-size: 0.82rem; border-radius: 6px;">💾 Save</button>
+                        </form>
+                    </div>
+
+                    <!-- Lightweight Charts Candlestick graph container -->
+                    <div class="card" id="chart-card" style="display: none; position: relative;">
+                        <div class="card-title" style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+                            <span id="chart-ticker-title">📉 Candlestick Chart</span>
+                            <button class="btn btn-secondary" onclick="closeChart()" style="padding: 4px 10px; font-size: 0.72rem; border-radius: 6px;">❌ Close</button>
+                        </div>
+                        <div id="chart-container" style="width: 100%; height: 350px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: STRATEGY BACKTESTER -->
+        <div id="tab-backtest" class="tab-content">
+            <div style="display: grid; grid-template-columns: 1fr 2fr; gap: 24px; align-items: start;">
+                <!-- Left Panel: Configurations Form -->
+                <div class="card" style="border: 1px solid rgba(16, 185, 129, 0.3); background: rgba(13, 20, 38, 0.75);">
+                    <div class="card-title">🧪 Backtester Configurations</div>
+                    <form id="backtest-form" onsubmit="runBacktest(event)" style="display: flex; flex-direction: column; gap: 14px;">
+                        <div class="form-group">
+                            <label>Symbol / Underlying Ticker</label>
+                            <select id="backtest-ticker-select" class="form-control" style="background: rgba(0,0,0,0.35);" onchange="handleBacktestTickerChange()">
+                                <option value="NIFTY50">NIFTY50 (Index)</option>
+                                <option value="BANKNIFTY">BANKNIFTY (Index)</option>
+                                <option value="CRUDEOIL">CRUDEOIL (Commodity)</option>
+                                <option value="SILVER">SILVER (Commodity)</option>
+                                <option value="CUSTOM">Custom Stock Ticker (e.g. SBIN, RELIANCE)</option>
+                            </select>
+                        </div>
+                        <div class="form-group" id="backtest-custom-ticker-group" style="display: none;">
+                            <label>Custom NSE Ticker Name</label>
+                            <input type="text" id="backtest-custom-ticker" class="form-control" placeholder="e.g. RELIANCE, TCS" style="background: rgba(0,0,0,0.35);">
+                        </div>
+                        <div class="form-group">
+                            <label>Strategy Type</label>
+                            <select name="strategy_type" class="form-control" style="background: rgba(0,0,0,0.35);">
+                                <option value="SMA_CROSSOVER">EMA Crossover</option>
+                                <option value="SUPERTREND_ONLY">Supertrend Only</option>
+                                <option value="RSI_ONLY">RSI Only</option>
+                                <option value="MACD_ONLY">MACD Only</option>
+                                <option value="SUPERTREND_RSI_MACD">Supertrend+RSI+MACD Combo</option>
+                            </select>
+                        </div>
+                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div class="form-group">
+                                <label>Period Duration</label>
+                                <select name="period" class="form-control" style="background: rgba(0,0,0,0.35);">
+                                    <option value="1mo">1 Month</option>
+                                    <option value="3mo">3 Months</option>
+                                    <option value="6mo" selected>6 Months</option>
+                                    <option value="1y">1 Year</option>
+                                    <option value="2y">2 Years</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label>Candle Confirmation</label>
+                                <select name="enable_candle_confirm" class="form-control" style="background: rgba(0,0,0,0.35);">
+                                    <option value="1">Enabled</option>
+                                    <option value="0">Disabled</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-row" style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                            <div class="form-group">
+                                <label>Target Profit (%)</label>
+                                <input type="number" name="target_pct" value="2.0" step="0.1" class="form-control" style="background: rgba(0,0,0,0.35);">
+                            </div>
+                            <div class="form-group">
+                                <label>Trailing SL (%)</label>
+                                <input type="number" name="trailing_sl_pct" value="1.0" step="0.1" class="form-control" style="background: rgba(0,0,0,0.35);">
+                            </div>
+                        </div>
+                        
+                        <!-- Collapsible Indicator Parameters Section -->
+                        <div style="border-top: 1px solid var(--border-color); padding-top: 14px; margin-top: 10px;">
+                            <span style="font-size: 0.75rem; font-weight: bold; color: var(--accent-blue); text-transform: uppercase;">Indicator Override Parameters</span>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">Fast EMA</label>
+                                    <input type="number" name="fast_period" value="20" class="form-control" style="padding: 4px 10px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">Slow EMA</label>
+                                    <input type="number" name="slow_period" value="50" class="form-control" style="padding: 4px 10px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px;">
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">Supertrend Period</label>
+                                    <input type="number" name="st_period" value="10" class="form-control" style="padding: 4px 10px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">ST Multiplier</label>
+                                    <input type="number" name="st_multiplier" value="3.0" step="0.1" class="form-control" style="padding: 4px 10px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px;">
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">RSI Period</label>
+                                    <input type="number" name="rsi_period" value="14" class="form-control" style="padding: 4px 6px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">RSI Oversold</label>
+                                    <input type="number" name="rsi_oversold" value="30" class="form-control" style="padding: 4px 6px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                                <div class="form-group">
+                                    <label style="font-size: 0.7rem;">RSI Overbought</label>
+                                    <input type="number" name="rsi_overbought" value="70" class="form-control" style="padding: 4px 6px; height: 32px; font-size: 0.8rem; background: rgba(0,0,0,0.35);">
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <button type="submit" id="run-backtest-btn" class="btn btn-success" style="width: 100%; height: 44px; margin-top: 10px; border-radius: 8px;">
+                            ⚡ Run Backtest Simulation
+                        </button>
+                    </form>
+                </div>
+                
+                <!-- Right Panel: Results & Logs -->
+                <div style="display: flex; flex-direction: column; gap: 24px;">
+                    <!-- Metrics Summary Cards -->
+                    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+                        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 4px;">
+                            <span style="font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Net P&L (₹)</span>
+                            <strong id="backtest-metric-pnl" style="font-size: 1.35rem; color: var(--text-secondary);">₹0.00</strong>
+                        </div>
+                        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 4px;">
+                            <span style="font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Win Rate (%)</span>
+                            <strong id="backtest-metric-winrate" style="font-size: 1.35rem; color: var(--text-secondary);">0.00%</strong>
+                        </div>
+                        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 4px;">
+                            <span style="font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Return ROI (%)</span>
+                            <strong id="backtest-metric-roi" style="font-size: 1.35rem; color: var(--text-secondary);">0.00%</strong>
+                        </div>
+                        <div class="card" style="padding: 16px; display: flex; flex-direction: column; gap: 4px;">
+                            <span style="font-size: 0.72rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 800;">Total Trades</span>
+                            <strong id="backtest-metric-trades" style="font-size: 1.35rem; color: var(--text-secondary);">0</strong>
+                        </div>
+                    </div>
+                    
+                    <!-- Trades Table -->
+                    <div class="card">
+                        <div class="card-title" style="border-bottom: 1px solid var(--border-color); padding-bottom: 14px; margin-bottom: 18px;">
+                            📊 Backtest Trades execution log (બેકટેસ્ટિંગ વેપાર લોગ)
+                        </div>
+                        <div style="overflow-x: auto; max-height: 400px;">
+                            <table style="width: 100%; border-collapse: collapse;">
+                                <thead>
+                                    <tr style="border-bottom: 1.5px solid var(--border-color);">
+                                        <th style="padding: 10px 8px; text-align: left; font-size: 0.8rem;">#</th>
+                                        <th style="padding: 10px 8px; text-align: left; font-size: 0.8rem;">Type</th>
+                                        <th style="padding: 10px 8px; text-align: left; font-size: 0.8rem;">Entry Date</th>
+                                        <th style="padding: 10px 8px; text-align: left; font-size: 0.8rem;">Exit Date</th>
+                                        <th style="padding: 10px 8px; text-align: right; font-size: 0.8rem;">Entry Spot</th>
+                                        <th style="padding: 10px 8px; text-align: right; font-size: 0.8rem;">Exit Spot</th>
+                                        <th style="padding: 10px 8px; text-align: right; font-size: 0.8rem;">P&L (₹)</th>
+                                        <th style="padding: 10px 8px; text-align: center; font-size: 0.8rem;">Exit Reason</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="backtest-trades-body">
+                                    <tr>
+                                        <td colspan="8" style="padding: 30px; text-align: center; color: var(--text-secondary);">
+                                            Configure settings and run a backtest to see the results.
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: CONSOLE LOGS -->
+        <div id="tab-logs" class="tab-content">
+            <div class="card">
+                <div class="card-title">🖥️ Real-time Server Logs Console</div>
+                <div class="terminal-box" id="terminal-console">Initializing log stream...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- JS SCRIPTS -->
+    <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+    <script>
+        // Global Execution States
+        let chart = null;
+        let candleSeries = null;
+        let currentChartTicker = null;
+        let lastTradeId = null;
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
+            
+            const activeTab = document.getElementById('tab-' + tabId);
+            if (activeTab) activeTab.classList.add('active');
+            
+            const activeBtn = document.getElementById('menu-btn-' + tabId);
+            if (activeBtn) activeBtn.classList.add('active');
+        }
+
+        function handleBacktestTickerChange() {
+            const select = document.getElementById('backtest-ticker-select');
+            const customGroup = document.getElementById('backtest-custom-ticker-group');
+            if (select.value === 'CUSTOM') {
+                customGroup.style.display = 'block';
+            } else {
+                customGroup.style.display = 'none';
+            }
+        }
+
+        function runBacktest(e) {
+            e.preventDefault();
+            const form = document.getElementById('backtest-form');
+            const btn = document.getElementById('run-backtest-btn');
+            
+            const tickerSelect = document.getElementById('backtest-ticker-select').value;
+            let ticker = tickerSelect;
+            if (tickerSelect === 'CUSTOM') {
+                ticker = document.getElementById('backtest-custom-ticker').value.trim();
+                if (!ticker) {
+                    alert('Please enter a custom Stock Ticker symbol!');
+                    return;
+                }
+            }
+            
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Simulating Backtest...';
+            
+            const formData = new FormData(form);
+            formData.append('ticker', ticker);
+            
+            fetch('/backtest', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                btn.disabled = false;
+                btn.innerHTML = '⚡ Run Backtest Simulation';
+                
+                if (!data.success) {
+                    alert('Backtest failed: ' + data.message);
+                    return;
+                }
+                
+                // Update metrics summary cards
+                const pnlEl = document.getElementById('backtest-metric-pnl');
+                pnlEl.innerHTML = '₹' + data.net_pnl.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                if (data.net_pnl > 0) {
+                    pnlEl.style.color = '#10b981';
+                } else if (data.net_pnl < 0) {
+                    pnlEl.style.color = '#ef4444';
+                } else {
+                    pnlEl.style.color = 'var(--text-secondary)';
+                }
+                
+                document.getElementById('backtest-metric-winrate').innerHTML = data.win_rate.toFixed(2) + '%';
+                document.getElementById('backtest-metric-roi').innerHTML = data.roi.toFixed(2) + '%';
+                document.getElementById('backtest-metric-trades').innerHTML = data.trades_count;
+                
+                // Populate trade table
+                const body = document.getElementById('backtest-trades-body');
+                body.innerHTML = '';
+                
+                if (data.trades_list.length === 0) {
+                    body.innerHTML = `<tr><td colspan="8" style="padding:30px; text-align:center; color:var(--text-secondary);">No trades were executed during this backtesting period.</td></tr>`;
+                    return;
+                }
+                
+                data.trades_list.forEach(t => {
+                    const row = document.createElement('tr');
+                    row.style.borderBottom = '1px solid rgba(255,255,255,0.06)';
+                    
+                    const typeColor = (t.type === 'CE' || t.type === 'BUY') ? '#10b981' : '#ef4444';
+                    const pnlColor = t.pnl > 0 ? '#10b981' : (t.pnl < 0 ? '#ef4444' : 'var(--text-secondary)');
+                    const sign = t.pnl > 0 ? '+' : '';
+                    
+                    row.innerHTML = `
+                        <td style="padding: 10px 8px; font-size: 0.8rem; color: var(--text-secondary);">${t.trade_num}</td>
+                        <td style="padding: 10px 8px; font-size: 0.8rem; font-weight: bold; color: ${typeColor};">${t.type}</td>
+                        <td style="padding: 10px 8px; font-size: 0.8rem; color: var(--text-secondary);">${t.entry_date}</td>
+                        <td style="padding: 10px 8px; font-size: 0.8rem; color: var(--text-secondary);">${t.exit_date}</td>
+                        <td style="padding: 10px 8px; text-align: right; font-size: 0.8rem; color: var(--text-secondary);">${t.entry_spot.toFixed(2)}</td>
+                        <td style="padding: 10px 8px; text-align: right; font-size: 0.8rem; color: var(--text-secondary);">${t.exit_spot.toFixed(2)}</td>
+                        <td style="padding: 10px 8px; text-align: right; font-size: 0.8rem; font-weight: bold; color: ${pnlColor};">${sign}₹${t.pnl.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</td>
+                        <td style="padding: 10px 8px; text-align: center; font-size: 0.72rem;"><span style="background: rgba(255,255,255,0.08); padding: 2px 6px; border-radius: 4px; color: var(--text-secondary);">${t.reason}</span></td>
+                    `;
+                    body.appendChild(row);
+                });
+            })
+            .catch(err => {
+                btn.disabled = false;
+                btn.innerHTML = '⚡ Run Backtest Simulation';
+                alert('An error occurred during the backtest request: ' + err);
+            });
+        }
+
+        function toggleBot() {
+            fetch('/toggle-bot', { method: 'POST' })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    updateStatusValues(data.state);
+                } else {
+                    alert(data.message);
+                }
+            })
+            .catch(err => alert('Error toggling bot status.'));
+        }
+
+        function resetSimulation() {
+            if(confirm("⚠️ Are you sure you want to clear your trade logs, reset balance to ₹100,000, and restart the simulation?")) {
+                fetch('/reset', { method: 'POST' })
+                .then(res => res.json())
+                .then(data => {
+                    alert(data.message);
+                    window.location.reload();
+                })
+                .catch(err => alert('Error resetting simulation.'));
+            }
+        }
+
+        function updateStatusValues(state) {
+            const pill = document.getElementById('bot-status-pill');
+            const btn = document.getElementById('toggle-bot-btn');
+            
+            if (state === 1) {
+                pill.innerText = "RUNNING";
+                pill.className = "status-pill status-running";
+                btn.innerText = "⏹️ Stop Algo Bot";
+                btn.className = "btn btn-danger";
+            } else {
+                pill.innerText = "STOPPED";
+                pill.className = "status-pill status-stopped";
+                btn.innerText = "▶️ Start Algo Bot";
+                btn.className = "btn btn-success";
+            }
+        }
+
+        function updateEnvironmentStyle(val) {
+            const el = document.getElementById('paper_vs_live');
+            if (!el) return;
+            if (val === 'LIVE') {
+                el.style.background = 'rgba(34, 197, 94, 0.15)';
+                el.style.border = '1px solid rgba(34, 197, 94, 0.4)';
+                el.style.color = '#22c55e';
+            } else {
+                el.style.background = 'rgba(239, 68, 68, 0.15)';
+                el.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+                el.style.color = '#ef4444';
+            }
+        }
+
+        function toggleManualTradeFields(prefix) {
+            const assetType = document.getElementById(prefix + '_trade_type').value;
+            const optTypeGroup = document.getElementById(prefix + '_option_type_group');
+            const tickerInput = document.getElementById(prefix + '_ticker');
+            
+            if (assetType === 'OPTION') {
+                if (optTypeGroup) optTypeGroup.style.display = 'block';
+                if (tickerInput) {
+                    tickerInput.placeholder = "e.g. NIFTY50, BANKNIFTY";
+                    if (tickerInput.value === "") {
+                        tickerInput.value = "NIFTY50";
+                    }
+                }
+            } else {
+                if (optTypeGroup) optTypeGroup.style.display = 'none';
+                if (tickerInput) {
+                    tickerInput.placeholder = "e.g. RELIANCE";
+                    if (tickerInput.value === "NIFTY50" || tickerInput.value === "BANKNIFTY") {
+                        tickerInput.value = "";
+                    }
+                }
+            }
+        }
+        
+        function submitManualOrder(action, prefix) {
+            const assetType = document.getElementById(prefix + '_trade_type').value;
+            const ticker = document.getElementById(prefix + '_ticker').value.trim().toUpperCase();
+            const optionType = document.getElementById(prefix + '_option_type').value;
+            const qtyVal = document.getElementById(prefix + '_qty').value.trim();
+            const qty = qtyVal ? parseInt(qtyVal) : null;
+            
+            if (!ticker) {
+                alert("Please enter a ticker symbol!");
+                return;
+            }
+            
+            const payload = {
+                ticker: ticker,
+                trade_type: assetType,
+                action: action,
+                option_type: optionType,
+                qty: qty
+            };
+            
+            fetch('/api/manual-trade', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    alert(data.message);
+                    updateLiveStatus();
+                    document.getElementById(prefix + '_qty').value = "";
+                } else {
+                    alert("Order placement failed: " + data.message);
+                }
+            })
+            .catch(err => {
+                console.error("Error submitting manual trade:", err);
+                alert("Error submitting manual trade: " + err);
+            });
+        }
+
+        function squareOffSingle(ticker) {
+            const formData = new FormData();
+            formData.append('ticker', ticker);
+            
+            fetch('/square-off', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                updateLiveStatus();
+            })
+            .catch(err => {
+                console.error('Error executing manual square off:', err);
+                alert('Error executing manual square off: ' + err);
+            });
+        }
+
+        function saveSegmentConfig(segment) {
+            const form = document.getElementById(`${segment}-segment-form`);
+            const formData = new FormData(form);
+            
+            const activeChk = document.getElementById(`${segment}-segment-active`);
+            const isActive = activeChk && activeChk.checked ? 1 : 0;
+            formData.append('is_active', isActive);
+            
+            fetch('/api/save-segment', {
+                method: 'POST',
+                body: formData
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    showNotice(data.message);
+                    updateLiveStatus();
+                } else {
+                    alert('Failed to save segment settings: ' + data.message);
+                }
+            })
+            .catch(err => {
+                console.error('Error saving segment config:', err);
+                alert('Error saving segment config');
+            });
+        }
+
+        let segmentsLoaded = false;
+
+        function updateLiveStatus() {
+            fetch('/api/status')
+            .then(res => res.json())
+            .then(data => {
+                // Update balance & equity
+                document.getElementById('val-balance').innerText = '₹' + data.virtual_balance.toFixed(2);
+                document.getElementById('val-equity').innerText = '₹' + data.equity.toFixed(2);
+                
+                // Update Live P&L metrics card
+                let totalLivePnl = 0.0;
+                if (data.positions && data.positions.length > 0) {
+                    data.positions.forEach(pos => {
+                        totalLivePnl += pos.pnl;
+                    });
+                }
+                const livePnlEl = document.getElementById('val-live-pnl');
+                if (livePnlEl) {
+                    livePnlEl.innerText = (totalLivePnl >= 0 ? '+' : '') + '₹' + totalLivePnl.toFixed(2);
+                    livePnlEl.style.color = totalLivePnl > 0 ? 'var(--neon-green)' : (totalLivePnl < 0 ? 'var(--neon-red)' : 'var(--text-secondary)');
+                }
+                
+                // Update SL count
+                const slHits = data.sl_hits_count;
+                const maxSl = data.max_daily_sl || 3;
+                const slVal = document.getElementById('val-sl-hits');
+                slVal.innerText = slHits + ' / ' + maxSl;
+                updateStatusValues(data.is_active);
+
+                // Update environment badge
+                const envBadge = document.getElementById('env-status-badge');
+                if (envBadge) {
+                    if (data.paper_vs_live === 'LIVE') {
+                        envBadge.innerText = "⚡ LIVE";
+                        envBadge.style.background = 'rgba(34, 197, 94, 0.15)';
+                        envBadge.style.border = '1px solid rgba(34, 197, 94, 0.4)';
+                        envBadge.style.color = '#22c55e';
+                    } else {
+                        envBadge.innerText = "📄 PAPER";
+                        envBadge.style.background = 'rgba(239, 68, 68, 0.15)';
+                        envBadge.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+                        envBadge.style.color = '#ef4444';
+                    }
+                }
+
+                // Sync segment config forms
+                if (data.segments) {
+                    for (const segment in data.segments) {
+                        const segData = data.segments[segment];
+                        const activeChk = document.getElementById(`${segment}-segment-active`);
+                        const activeLabel = document.getElementById(`${segment}-active-label`);
+                        
+                        if (activeChk) activeChk.checked = segData.is_active === 1;
+                        if (activeLabel) {
+                            if (segData.is_active === 1) {
+                                activeLabel.innerText = "ACTIVE";
+                                activeLabel.style.color = "var(--neon-green)";
+                            } else {
+                                activeLabel.innerText = "INACTIVE";
+                                activeLabel.style.color = "var(--text-secondary)";
+                            }
+                        }
+                        
+                        if (!segmentsLoaded) {
+                            const form = document.getElementById(`${segment}-segment-form`);
+                            if (form) {
+                                for (const key in segData) {
+                                    const input = form.querySelector(`[name="${key}"]`);
+                                    if (input) {
+                                        input.value = segData[key];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    segmentsLoaded = true;
+                }
+
+                // Sync Segment Inactive Warning Banner
+                const warningBanner = document.getElementById('segment-inactive-warning');
+                if (warningBanner) {
+                    const optionsActive = data.segments && data.segments.options && data.segments.options.is_active === 1;
+                    const equityActive = data.segments && data.segments.equity && data.segments.equity.is_active === 1;
+                    warningBanner.style.display = (optionsActive || equityActive) ? 'none' : 'block';
+                }
+
+                // Render Global Active Open Positions Table
+                const globalPositionsCard = document.getElementById('global-active-positions-card');
+                const globalPositionsBody = document.getElementById('global-active-positions-body');
+                
+                if (globalPositionsCard && globalPositionsBody) {
+                    if (data.positions && data.positions.length > 0) {
+                        globalPositionsCard.style.display = 'block';
+                        let globalHtml = '';
+                        data.positions.forEach(pos => {
+                            const pnlClass = pos.pnl >= 0 ? 'pnl-green' : 'pnl-red';
+                            const pnlSign = pos.pnl >= 0 ? '+' : '';
+                            const targetVal = pos.target_price !== undefined && pos.target_price !== null ? 
+                                '₹' + pos.target_price.toFixed(2) : 'N/A';
+                            const strategyLabel = pos.strategy === 'SMA_CROSSOVER' ? 'EMA Crossover' : 
+                                                 (pos.strategy === 'SUPERTREND_RSI_MACD' ? 'Supertrend+RSI+MACD' : 
+                                                  (pos.strategy === 'SUPERTREND_ONLY' ? 'Supertrend Only' : pos.strategy));
+                            
+                            globalHtml += `
+                                <tr style="border-bottom: 1px solid rgba(255, 255, 255, 0.05); font-size: 0.9rem;">
+                                    <td style="padding: 12px 10px; font-weight: 700; color: var(--text-primary); cursor: pointer; text-decoration: underline;" onclick="loadChart('${pos.ticker}')">${pos.ticker}</td>
+                                    <td style="padding: 12px 10px;">${strategyLabel}</td>
+                                    <td style="padding: 12px 10px;"><span style="font-weight: 800; color: ${pos.type === 'BUY' ? 'var(--neon-green)' : 'var(--neon-red)'};">${pos.type}</span></td>
+                                    <td style="padding: 12px 10px; font-weight: 700;">${pos.qty}</td>
+                                    <td style="padding: 12px 10px;">₹${pos.entry_price.toFixed(2)}</td>
+                                    <td style="padding: 12px 10px;" class="${pnlClass}">₹${pos.current_price.toFixed(2)}</td>
+                                    <td style="padding: 12px 10px; color: var(--neon-red); font-weight: 700;">₹${pos.stop_loss.toFixed(2)}</td>
+                                    <td style="padding: 12px 10px; color: var(--neon-green); font-weight: 700;">${targetVal}</td>
+                                    <td style="padding: 12px 10px;" class="${pnlClass} font-weight-800">${pnlSign}₹${pos.pnl.toFixed(2)}</td>
+                                    <td style="padding: 12px 10px; text-align: center;">
+                                        <button class="btn btn-danger" style="padding: 4px 10px; font-size: 0.75rem; border-radius: 6px;" onclick="squareOffSingle('${pos.ticker}')">Square Off</button>
+                                    </td>
+                                </tr>
+                            `;
+                        });
+                        globalPositionsBody.innerHTML = globalHtml;
+                    } else {
+                        globalPositionsCard.style.display = 'none';
+                        globalPositionsBody.innerHTML = '';
+                    }
+                }
+
+                // Update Options Feed data
+                if (data.stocks) {
+                    if (data.stocks.NIFTY50) {
+                        document.getElementById('ticker-nifty').innerText = '₹' + data.stocks.NIFTY50.price.toFixed(2);
+                    }
+                    if (data.stocks.BANKNIFTY) {
+                        document.getElementById('ticker-banknifty').innerText = '₹' + data.stocks.BANKNIFTY.price.toFixed(2);
+                    }
+                }
+                
+                if (data.options) {
+                    const niftyCeName = document.getElementById('opt-nifty-ce-name');
+                    if (niftyCeName) niftyCeName.innerText = data.options.NIFTY_CE_NAME || 'N/A';
+                    
+                    const niftyCePrice = document.getElementById('opt-nifty-ce-price');
+                    if (niftyCePrice) niftyCePrice.innerText = '₹' + (data.options.NIFTY_CE_PRICE || 0).toFixed(2);
+                    
+                    const niftyPeName = document.getElementById('opt-nifty-pe-name');
+                    if (niftyPeName) niftyPeName.innerText = data.options.NIFTY_PE_NAME || 'N/A';
+                    
+                    const niftyPePrice = document.getElementById('opt-nifty-pe-price');
+                    if (niftyPePrice) niftyPePrice.innerText = '₹' + (data.options.NIFTY_PE_PRICE || 0).toFixed(2);
+                    
+                    const bankCeName = document.getElementById('opt-bank-ce-name');
+                    if (bankCeName) bankCeName.innerText = data.options.BANK_CE_NAME || 'N/A';
+                    
+                    const bankCePrice = document.getElementById('opt-bank-ce-price');
+                    if (bankCePrice) bankCePrice.innerText = '₹' + (data.options.BANK_CE_PRICE || 0).toFixed(2);
+                    
+                    const bankPeName = document.getElementById('opt-bank-pe-name');
+                    if (bankPeName) bankPeName.innerText = data.options.BANK_PE_NAME || 'N/A';
+                    
+                    const bankPePrice = document.getElementById('opt-bank-pe-price');
+                    if (bankPePrice) bankPePrice.innerText = '₹' + (data.options.BANK_PE_PRICE || 0).toFixed(2);
+                }
+
+                // Live Trade Execution Toast Notification Check
+                if (data.recent_trades && data.recent_trades.length > 0) {
+                    const latestTrade = data.recent_trades[0];
+                    if (lastTradeId && lastTradeId !== latestTrade.id) {
+                        showTradeNotification(latestTrade);
+                    }
+                    lastTradeId = latestTrade.id;
+                }
+            })
+            .catch(err => console.log('Error updating status values:', err));
+        }
+
+        function updateConsoleLogs() {
+            fetch('/api/logs')
+            .then(res => res.text())
+            .then(text => {
+                const consoleBox = document.getElementById('terminal-console');
+                if (consoleBox) {
+                    consoleBox.innerText = text;
+                    consoleBox.scrollTop = consoleBox.scrollHeight;
+                }
+            })
+            .catch(err => console.log('Error getting log streams.'));
+        }
+
+        function showNotice(msg) {
+            // Simple toast notification fallback
+            const toast = document.createElement('div');
+            toast.style.position = 'fixed';
+            toast.style.bottom = '20px';
+            toast.style.right = '20px';
+            toast.style.background = 'var(--gradient-accent)';
+            toast.style.color = 'white';
+            toast.style.padding = '12px 24px';
+            toast.style.borderRadius = '10px';
+            toast.style.boxShadow = '0 10px 30px rgba(99, 102, 241, 0.4)';
+            toast.style.zIndex = '9999';
+            toast.style.fontWeight = 'bold';
+            toast.style.fontSize = '0.9rem';
+            toast.innerText = msg;
+            document.body.appendChild(toast);
+            setTimeout(() => {
+                toast.style.transition = 'opacity 0.5s';
+                toast.style.opacity = '0';
+                setTimeout(() => toast.remove(), 500);
+            }, 3000);
+        }
+
+        // Charting Logic (Lightweight Charts)
+        function loadChart(ticker) {
+            currentChartTicker = ticker;
+            document.getElementById('chart-card').style.display = 'block';
+            document.getElementById('chart-ticker-title').innerText = `📊 Live Chart: ${ticker}`;
+            
+            const container = document.getElementById('chart-container');
+            container.innerHTML = '';
+            
+            chart = LightweightCharts.createChart(container, {
+                layout: {
+                    background: { type: LightweightCharts.ColorType.Solid, color: '#03050a' },
+                    textColor: '#94a3b8',
+                },
+                grid: {
+                    vertLines: { color: 'rgba(255, 255, 255, 0.04)' },
+                    horzLines: { color: 'rgba(255, 255, 255, 0.04)' },
+                },
+                timeScale: {
+                    timeVisible: true,
+                    secondsVisible: false,
+                }
+            });
+
+            candleSeries = chart.addCandlestickSeries({
+                upColor: '#10b981',
+                downColor: '#ef4444',
+                borderVisible: false,
+                wickUpColor: '#10b981',
+                wickDownColor: '#ef4444',
+            });
+
+            fetch(`/api/chart-data?ticker=${ticker}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.success && data.history) {
+                    const formatted = data.history.map(bar => ({
+                        time: bar.time,
+                        open: bar.open,
+                        high: bar.high,
+                        low: bar.low,
+                        close: bar.close
+                    }));
+                    candleSeries.setData(formatted);
+                }
+            })
+            .catch(err => console.error("Error loading chart data:", err));
+        }
+
+        function closeChart() {
+            document.getElementById('chart-card').style.display = 'none';
+            chart = null;
+            candleSeries = null;
+            currentChartTicker = null;
+        }
+
+        function showTradeNotification(trade) {
+            showNotice(`🔔 TRADE EXECUTED: ${trade.action} ${trade.quantity} ${trade.ticker} @ ₹${trade.entry_price ? trade.entry_price.toFixed(2) : (trade.exit_price ? trade.exit_price.toFixed(2) : '0.00')}`);
+        }
+
+        // Setup timers
+        window.addEventListener('DOMContentLoaded', () => {
+            updateLiveStatus();
+            updateConsoleLogs();
+            setInterval(updateLiveStatus, 3000);
+            setInterval(updateConsoleLogs, 2000);
+            toggleManualTradeFields('mt_index');
+        });
+    </script>
+</body>
+</html>

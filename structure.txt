@@ -1,0 +1,43 @@
+32: def login_kotak_neo():
+114: def fetch_real_prices_neo():
+151: def fetch_real_prices():
+177: def place_neo_order(ticker, action_type, qty, segment='nse_fo'):
+247: def get_option_name(index_name, option_type):
+277: def get_db():
+282: def init_db():
+422: init_db()
+439: def init_candle_history():
+489: def get_momentum_stocks():
+499: def fetch_single(symbol):
+544: def get_recent_volatility(ticker, period=14):
+555: def ensure_candle_history(ticker):
+576: def trigger_entry_signal(index_name, option_type, fast_p, slow_p):
+643: def run_trading_bot():
+808: def fetch_price(sym):
+1189: def square_off_position(ticker, reason, exit_price):
+1226: def get_live_price(ticker):
+1237: def increment_sl_hits():
+1243: def trigger_equity_signal(symbol, action_type, fast_p, slow_p):
+1305: def square_off_equity_position(symbol, reason, exit_price):
+1345: @app.route("/")
+1346: def index():
+1362: @app.route("/save-credentials", methods=["POST"])
+1363: def save_credentials():
+1394: @app.route("/save-settings", methods=["POST"])
+1395: def save_settings():
+1396: def get_float(name, default):
+1403: def get_int(name, default):
+1436: @app.route("/toggle-bot", methods=["POST"])
+1437: def toggle_bot():
+1459: @app.route("/reset", methods=["POST"])
+1460: def reset_simulation():
+1485: @app.route("/square-off", methods=["POST"])
+1486: def manual_square_off():
+1505: @app.route("/api/status")
+1506: def get_status():
+1598: @app.route("/api/logs")
+1599: def get_logs():
+1607: @app.route("/api/chart-data")
+1608: def get_chart_data():
+1706: @app.route("/backtest", methods=["POST"])
+1707: def run_backtest():

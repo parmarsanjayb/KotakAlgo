@@ -1,0 +1,14 @@
+venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.db
+*.log
+.env
+.agents/
+*.zip
+*.pem
+node_modules/
+.pytest_cache/
+spv-quantum-ai/.pytest_cache/
+spv-quantum-ai/.env

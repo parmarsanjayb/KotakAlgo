@@ -1,0 +1,7 @@
+enabled: true
+filter_type: VolumeSpike
+name: VolumeSpikeScanner
+params:
+  volume_multiplier: 2.5
+priority: 1
+segment: Equity

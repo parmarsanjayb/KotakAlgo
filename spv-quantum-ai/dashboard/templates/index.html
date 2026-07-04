@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SPV Quantum AI - Trading OS Dashboard</title>
+    <!-- Include Stylesheet -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+    <!-- Top Status Header Bar -->
+    <header>
+        <h1>SPV Quantum AI // Trading OS</h1>
+        <div class="system-status">
+            <span class="status-indicator" id="status-indicator"></span>
+            <span>WebSockets: <strong id="connection-status">DISCONNECTED</strong></span>
+        </div>
+    </header>
+
+    <div class="dashboard-grid">
+        <!-- Left Side Primary Column (Data Streams and Live logs) -->
+        <main class="main-column">
+            
+            <!-- Real-time Asset Price Feed Cards -->
+            <div class="card">
+                <h2>Real-Time Price Streams</h2>
+                <div class="prices-container" id="prices-row">
+                    <!-- Dynamic price card injected here via WebSocket -->
+                </div>
+            </div>
+
+            <!-- Executed Transactions Grid -->
+            <div class="card">
+                <h2>Executed Trades (Fills)</h2>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Order ID</th>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Price</th>
+                                <th>Quantity</th>
+                                <th>Commission</th>
+                                <th>Time</th>
+                                <th>Broker</th>
+                            </tr>
+                        </thead>
+                        <tbody id="trades-body">
+                            <!-- Injected programmatically -->
+                            <tr>
+                                <td colspan="8" style="text-align: center; color: var(--text-secondary);">No trades loaded yet.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Asynchronous Message Bus terminal output -->
+            <div class="card">
+                <h2>Message Bus Stream &amp; Agent Logs</h2>
+                <div class="terminal" id="terminal-logs">
+                    <!-- Scrolling log messages -->
+                </div>
+            </div>
+        </main>
+
+        <!-- Right Side Panel Column (Controls & Forms) -->
+        <aside class="side-column">
+            
+            <!-- Paper Trading Engine Control Card -->
+            <div class="card" id="paper-trading-card">
+                <h2>Paper Trading Control</h2>
+                <div id="paper-status-display" style="margin-bottom: 1rem; display: flex; align-items: center; justify-content: space-between;">
+                    <span>Status: <strong id="paper-status-val" style="color: var(--accent-red)">INACTIVE</strong></span>
+                    <span id="paper-session-val" style="font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-secondary)">-</span>
+                </div>
+                
+                <!-- Display metrics when active -->
+                <div id="paper-metrics" style="display: none; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-bottom: 1rem; background: rgba(255,255,255,0.02); border-radius: 8px; padding: 0.75rem; border: 1px solid var(--border-glass);">
+                    <div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Capital</div>
+                        <div id="paper-cap-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; font-weight: 700; color: var(--accent-green)">$0.00</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Virtual P&amp;L</div>
+                        <div id="paper-pnl-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1.1rem; font-weight: 700; color: var(--text-primary)">$0.00</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Win Rate</div>
+                        <div id="paper-win-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1rem; font-weight: 500;">0.0%</div>
+                    </div>
+                    <div>
+                        <div style="font-size: 0.75rem; color: var(--text-secondary);">Trades</div>
+                        <div id="paper-trades-val" style="font-family: 'JetBrains Mono', monospace; font-size: 1rem; font-weight: 500;">0</div>
+                    </div>
+                </div>
+
+                <!-- Form to config and start -->
+                <div id="paper-setup-form">
+                    <div class="form-group">
+                        <label for="paper-capital">Initial Capital</label>
+                        <input type="number" id="paper-capital" value="500000" step="1000" min="1000">
+                    </div>
+                    <div class="form-group" style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem;">
+                        <div>
+                            <label for="paper-latency">Latency (ms)</label>
+                            <input type="number" id="paper-latency" value="25" step="5" min="0">
+                        </div>
+                        <div>
+                            <label for="paper-slippage">Slippage (%)</label>
+                            <input type="number" id="paper-slippage" value="0.02" step="0.005" min="0">
+                        </div>
+                    </div>
+                    <button type="button" id="btn-paper-start" class="btn-submit" style="background: linear-gradient(135deg, var(--accent-blue), #00a8cc);">Start Paper Session</button>
+                </div>
+                
+                <button type="button" id="btn-paper-stop" class="btn-submit" style="display: none; background: var(--accent-red); color: white;">Stop Paper Session</button>
+            </div>
+
+            <!-- Manual Ticket Order Form -->
+            <div class="card">
+                <h2>Submit Trading Order</h2>
+                <form id="order-form">
+                    <div class="form-group">
+                        <label for="order-symbol">Asset Symbol</label>
+                        <select id="order-symbol">
+                            <option value="BTCUSD">BTCUSD (Bitcoin)</option>
+                            <option value="ETHUSD">ETHUSD (Ethereum)</option>
+                            <option value="NIFTY50">NIFTY50 (Nifty 50 Index)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="order-side">Side</label>
+                        <select id="order-side">
+                            <option value="BUY">BUY</option>
+                            <option value="SELL">SELL</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="order-type">Order Type</label>
+                        <select id="order-type">
+                            <option value="MARKET">MARKET</option>
+                            <option value="LIMIT">LIMIT</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="order-qty">Quantity</label>
+                        <input type="number" id="order-qty" step="0.0001" min="0.0001" value="0.01" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="order-price">Limit Price (Optional)</label>
+                        <input type="number" id="order-price" step="0.01" placeholder="Leave empty for Market order">
+                    </div>
+
+                    <button type="submit" class="btn-submit">Dispatch Order Request</button>
+                </form>
+            </div>
+
+            <!-- Placed Orders Status Grid -->
+            <div class="card">
+                <h2>Active/Recent Orders</h2>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>ID</th>
+                                <th>Symbol</th>
+                                <th>Side</th>
+                                <th>Type</th>
+                                <th>Price</th>
+                                <th>Qty</th>
+                                <th>Status</th>
+                                <th>Broker</th>
+                            </tr>
+                        </thead>
+                        <tbody id="orders-body">
+                            <!-- Injected programmatically -->
+                            <tr>
+                                <td colspan="8" style="text-align: center; color: var(--text-secondary);">No orders loaded.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <!-- Load App Script -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

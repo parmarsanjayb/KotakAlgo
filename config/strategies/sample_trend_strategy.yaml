@@ -1,0 +1,23 @@
+actions:
+  matched:
+    action: SIGNAL_BUY
+    confidence: 85.0
+    reason: EMA_9 crossed above EMA_20, RSI is above 50, and Market is Trending Bullish.
+description: Golden Cross with RSI support in Bullish Regime
+enabled: true
+name: sample_trend_strategy
+rules:
+  conditions:
+  - key: EMA_9
+    operator: crosses_above
+    source: indicator
+    target: EMA_20
+  - key: RSI
+    operator: '>'
+    source: indicator
+    value: 50.0
+  - operator: ==
+    source: market_regime
+    value: TRENDING_BULLISH
+  operator: AND
+version: 1.0.0
