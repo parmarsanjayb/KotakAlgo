@@ -11,6 +11,7 @@ from core.logging import get_logger
 from portfolio.engine import portfolio_engine
 from risk.engine import risk_engine
 from scoring.engine import decision_scoring_engine
+from employees import employee_engine
 
 logger = get_logger("chief_decision_agent")
 
@@ -122,7 +123,7 @@ class DecisionPublisher:
 
 class ChiefDecisionAgent(BaseAgent):
     """
-    Final Decision Authority for the Trading OS.
+    AI CEO & Final Decision Authority for the Trading OS.
     Evaluates scoring and risk metrics, applies mandatory checks, and issues APPROVED or REJECTED statuses.
     """
     def __init__(self) -> None:
@@ -153,6 +154,182 @@ class ChiefDecisionAgent(BaseAgent):
     async def shutdown(self) -> None:
         self.log_info("ChiefDecisionAgent stopped.")
 
+    def _get_employee_recommendation(self, employee, symbol: str) -> tuple[str, float]:
+        """
+        Retrieves (recommendation, confidence) from an employee instance for the given symbol.
+        """
+        if not employee:
+            return "WAIT", 0.0
+        
+        results = getattr(employee, "latest_results", {})
+        if not results:
+            return "WAIT", 0.0
+        
+        res = results.get(symbol)
+        if not res:
+            res = results.get(symbol.upper())
+        if not res:
+            res = results.get("SYSTEM")
+        if not res:
+            try:
+                res = next(iter(results.values()))
+            except Exception:
+                res = None
+            
+        if not res:
+            return "WAIT", 0.0
+            
+        rec = res.get("recommendation") or res.get("confirmation_status") or "WAIT"
+        conf = float(res.get("confidence") or 50.0)
+        return str(rec).upper(), conf
+
+    def _evaluate_ceo_decision(self, symbol: str, side: str, risk_status: str) -> Dict[str, Any]:
+        """
+        Executes the AI CEO Weighted Decision Engine.
+        """
+        # Helper to check matching side
+        def matches_side(rec: str, trade_side: str) -> bool:
+            rec_upper = rec.upper()
+            side_upper = trade_side.upper()
+            if rec_upper == "WAIT" or rec_upper == "NEUTRAL" or rec_upper == "NO_TRADE":
+                return False
+            if side_upper == "BUY":
+                return "BUY" in rec_upper or "BULLISH" in rec_upper or "CE" in rec_upper or rec_upper == "ALLOW"
+            elif side_upper == "SELL":
+                return "SELL" in rec_upper or "BEARISH" in rec_upper or "PE" in rec_upper
+            return False
+
+        # Helper to check opposite side
+        def opposite_side(rec: str, trade_side: str) -> bool:
+            rec_upper = rec.upper()
+            side_upper = trade_side.upper()
+            if rec_upper == "WAIT" or rec_upper == "NEUTRAL" or rec_upper == "NO_TRADE":
+                return False
+            if side_upper == "BUY":
+                return "SELL" in rec_upper or "BEARISH" in rec_upper or "PE" in rec_upper
+            elif side_upper == "SELL":
+                return "BUY" in rec_upper or "BULLISH" in rec_upper or "CE" in rec_upper or rec_upper == "ALLOW"
+            return False
+
+        # 1. Evaluate Mandatory Employees
+        trend_rec, trend_conf = self._get_employee_recommendation(employee_engine.trend_intelligence, symbol)
+        vol_rec, vol_conf = self._get_employee_recommendation(employee_engine.volume_intelligence, symbol)
+        risk_rec, risk_conf = self._get_employee_recommendation(employee_engine.risk_emp, symbol)
+
+        trend_passed = matches_side(trend_rec, side)
+        vol_passed = (vol_rec == "CONFIRM" or matches_side(vol_rec, side))
+        risk_passed = (risk_status == "ALLOW" and risk_rec != "WAIT" and risk_rec != "BLOCK")
+
+        mandatory_passed = trend_passed and vol_passed and risk_passed
+        block_trade = not risk_passed
+
+        mandatory_reason = []
+        if not trend_passed:
+            mandatory_reason.append(f"Trend Employee reject ({trend_rec})")
+        if not vol_passed:
+            mandatory_reason.append(f"Volume Employee reject ({vol_rec})")
+        if not risk_passed:
+            mandatory_reason.append(f"Risk Employee block ({risk_rec}/RiskStatus:{risk_status})")
+
+        # 2. Evaluate Weighted Employees
+        weights = {
+            "vwap": (employee_engine.vwap_emp, 0.15),
+            "momentum": (employee_engine.momentum, 0.15),
+            "liquidity": (employee_engine.liquidity, 0.15),
+            "oi": (employee_engine.oi_emp, 0.10),
+            "pcr": (employee_engine.pcr_emp, 0.10),
+            "greeks": (employee_engine.greeks, 0.10),
+            "option_flow": (employee_engine.option_flow, 0.25)
+        }
+
+        weighted_score_sum = 0.0
+        weighted_breakdown = []
+        agreed_count = 0
+
+        # Count mandatory agreement
+        if trend_passed: agreed_count += 1
+        if vol_passed: agreed_count += 1
+        if risk_passed: agreed_count += 1
+
+        for name, (emp, weight) in weights.items():
+            emp_rec, emp_conf = self._get_employee_recommendation(emp, symbol)
+            
+            if matches_side(emp_rec, side):
+                score = emp_conf
+                agreed_count += 1
+            elif opposite_side(emp_rec, side):
+                score = -emp_conf
+            else:
+                score = 0.0
+
+            weighted_score_sum += weight * score
+            weighted_breakdown.append(f"{name.upper()}: {emp_rec} ({emp_conf:.1f}% -> weight impact: {weight*score:.1f}%)")
+
+        # 3. Evaluate Advisory Employees
+        news_rec, news_conf = self._get_employee_recommendation(employee_engine.news_emp, symbol)
+        cal_rec, cal_conf = self._get_employee_recommendation(employee_engine.calendar, symbol)
+        evt_rec, evt_conf = self._get_employee_recommendation(employee_engine.event_risk, symbol)
+
+        advisory_adjustment = 0.0
+        advisory_breakdown = []
+
+        if matches_side(news_rec, side):
+            advisory_adjustment += 5.0
+            advisory_breakdown.append("News: BULLISH bonus (+5.0%)")
+        elif opposite_side(news_rec, side):
+            advisory_adjustment -= 5.0
+            advisory_breakdown.append("News: BEARISH penalty (-5.0%)")
+
+        if matches_side(cal_rec, side):
+            advisory_adjustment += 5.0
+            advisory_breakdown.append("Calendar: High-match bonus (+5.0%)")
+        elif opposite_side(cal_rec, side):
+            advisory_adjustment -= 5.0
+            advisory_breakdown.append("Calendar: Contrary-match penalty (-5.0%)")
+
+        if evt_rec == "WAIT" or opposite_side(evt_rec, side):
+            advisory_adjustment -= 10.0
+            advisory_breakdown.append("Event Risk: Alert penalty (-10.0%)")
+
+        # Final calculations
+        final_confidence = max(0.0, min(100.0, weighted_score_sum + advisory_adjustment))
+        consensus_pct = (agreed_count / 10.0) * 100.0
+
+        # Risk designation
+        if block_trade or not mandatory_passed:
+            risk_level = "HIGH"
+        elif consensus_pct >= 75.0 and final_confidence >= 75.0:
+            risk_level = "LOW"
+        else:
+            risk_level = "MEDIUM"
+
+        # Construct Reason
+        reason_parts = []
+        if mandatory_passed:
+            reason_parts.append("Mandatory employees approved.")
+        else:
+            reason_parts.append(f"Mandatory employee check failed: {', '.join(mandatory_reason)}.")
+
+        reason_parts.append("Weighted votes: [" + ", ".join(weighted_breakdown) + "]")
+        if advisory_breakdown:
+            reason_parts.append("Advisory feedback: [" + ", ".join(advisory_breakdown) + "]")
+        
+        reason_parts.append(f"Calculated Weighted Score: {weighted_score_sum:.1f}%.")
+        reason_parts.append(f"Advisory Adjustments: {advisory_adjustment:+.1f}%.")
+        reason_parts.append(f"CEO Consensus: {consensus_pct:.1f}% agreement ({agreed_count}/10 employees).")
+        reason_parts.append(f"Calculated CEO Confidence: {final_confidence:.1f}% | Risk: {risk_level}.")
+
+        reason = " ".join(reason_parts)
+
+        return {
+            "confidence": round(final_confidence, 2),
+            "risk": risk_level,
+            "consensus": round(consensus_pct, 2),
+            "reason": reason,
+            "mandatory_passed": mandatory_passed,
+            "block_trade": block_trade
+        }
+
     async def analyze(self, event: EventModel) -> Optional[AgentResultModel]:
         if event.event_type != "decision_score":
             return None
@@ -160,25 +337,37 @@ class ChiefDecisionAgent(BaseAgent):
         start_time = time.perf_counter()
         score_data = event.payload.get("decision_score", event.payload)
         symbol = score_data.get("symbol", "UNKNOWN")
-        confidence = float(score_data.get("overall_confidence", 0.0))
+        side = score_data.get("side", "BUY")
         risk_status = score_data.get("risk_status", "ALLOW")
         strategy_name = score_data.get("recommended_strategy", "trend_strategy")
 
         async with self._lock:
-            # 1. Resolve primary conflicts
-            state = self.resolver.resolve(confidence, risk_status)
-            
-            # 2. Run detailed mandatory checks
-            if state != "REJECTED":
-                chk_state, code, explanation = await self.coordinator.validate_checks(score_data)
+            # 1. Run AI CEO Weighted Decision Engine
+            ceo_eval = self._evaluate_ceo_decision(symbol, side, risk_status)
+            confidence = ceo_eval["confidence"]
+
+            # 2. Determine state and detailed checks
+            if ceo_eval["block_trade"]:
+                state = "BLOCKED"
+                code = "RISK_REJECTION"
+                explanation = ceo_eval["reason"]
+            elif not ceo_eval["mandatory_passed"]:
+                state = "REJECTED"
+                code = "MANDATORY_EMPLOYEE_FAILURE"
+                explanation = ceo_eval["reason"]
+            else:
+                # Copy score data and override confidence with CEO confidence
+                score_data_copy = dict(score_data)
+                score_data_copy["confidence"] = confidence
+                score_data_copy["overall_confidence"] = confidence
+                
+                chk_state, code, explanation = await self.coordinator.validate_checks(score_data_copy)
                 if chk_state != "APPROVED":
                     state = chk_state
+                    explanation = f"{explanation} [CEO explanation: {ceo_eval['reason']}]"
                 else:
-                    code = "APPROVED"
-                    explanation = "All checks passed successfully."
-            else:
-                code = "CONFIDENCE_OR_RISK_FAILURE"
-                explanation = f"Confidence {confidence}% or risk status {risk_status} rejected."
+                    state = "APPROVED"
+                    explanation = ceo_eval["reason"]
 
             # Resolve actual price and quantity dynamically
             from market.manager import market_data_manager
@@ -194,11 +383,13 @@ class ChiefDecisionAgent(BaseAgent):
                 "symbol": symbol,
                 "strategy_name": strategy_name,
                 "confidence": confidence,
+                "risk": ceo_eval["risk"],
+                "consensus": ceo_eval["consensus"],
                 "status": state,
                 "reason_code": code,
                 "explanation": explanation,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "side": score_data.get("side", "BUY"),
+                "side": side,
                 "quantity": qty,
                 "price": price
             }

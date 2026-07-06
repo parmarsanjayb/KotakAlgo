@@ -76,6 +76,24 @@ async def test_chief_decision_agent_integration():
     async with portfolio_engine.positions._lock:
         portfolio_engine.positions._positions.clear()
 
+    # Mock employee engine state for RELIANCE
+    from employees import employee_engine
+    employee_engine.trend_intelligence.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.volume_intelligence.latest_results["RELIANCE"] = {"confirmation_status": "CONFIRM", "confidence": 80.0}
+    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
+
+    employee_engine.vwap_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.momentum.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.liquidity.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.oi_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.pcr_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.greeks.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+    employee_engine.option_flow.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
+
+    employee_engine.news_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 70.0}
+    employee_engine.calendar.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 70.0}
+    employee_engine.event_risk.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 70.0}
+
     # Track events
     approved_events = []
     async def cb(evt: EventModel):
@@ -121,3 +139,41 @@ async def test_chief_decision_agent_integration():
     await agent.stop()
     await event_bus.unsubscribe("trade_approved", cb)
     await event_bus.stop()
+
+
+def test_chief_decision_agent_ceo_logic():
+    agent = ChiefDecisionAgent()
+    from employees import employee_engine
+    
+    # Test case 1: Mandatory Trend Fail
+    employee_engine.trend_intelligence.latest_results["TCS"] = {"recommendation": "SELL", "confidence": 80.0}  # Sell trend on Buy request
+    employee_engine.volume_intelligence.latest_results["TCS"] = {"confirmation_status": "CONFIRM", "confidence": 80.0}
+    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
+
+    decision = agent._evaluate_ceo_decision("TCS", "BUY", "ALLOW")
+    assert decision["mandatory_passed"] is False
+    assert "Trend Employee reject" in decision["reason"]
+
+    # Test case 2: Weighted calculations
+    # Trend, Volume, Risk pass
+    employee_engine.trend_intelligence.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 90.0}
+    employee_engine.volume_intelligence.latest_results["TCS"] = {"confirmation_status": "CONFIRM", "confidence": 80.0}
+    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
+
+    # All weighted employees recommend BUY
+    for emp in [employee_engine.vwap_emp, employee_engine.momentum, employee_engine.liquidity, 
+                employee_engine.oi_emp, employee_engine.pcr_emp, employee_engine.greeks, employee_engine.option_flow]:
+        emp.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 80.0}
+
+    # Advisory employees
+    employee_engine.news_emp.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 70.0}
+    employee_engine.calendar.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 70.0}
+    employee_engine.event_risk.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 70.0}
+
+    decision2 = agent._evaluate_ceo_decision("TCS", "BUY", "ALLOW")
+    assert decision2["mandatory_passed"] is True
+    # Weighted score = sum(weight * 80.0) = 80.0. News/Calendar add +10%. Clamped at 90.0% confidence.
+    assert decision2["confidence"] == 90.0
+    assert decision2["risk"] == "LOW"
+    assert decision2["consensus"] == 100.0  # 10/10 employees agree
+

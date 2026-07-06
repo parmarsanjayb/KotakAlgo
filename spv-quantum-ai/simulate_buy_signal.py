@@ -129,6 +129,22 @@ async def main():
             order_filled_future.set_result(order_data)
             
     await event_bus.subscribe("order_filled", on_order_filled)
+
+    # Seed employee engine states for BANKNIFTY to allow CEO approval
+    from employees import employee_engine
+    employee_engine.trend_intelligence.latest_results[symbol] = {"recommendation": "BUY", "confidence": 90.0}
+    employee_engine.volume_intelligence.latest_results[symbol] = {"confirmation_status": "CONFIRM", "confidence": 85.0}
+    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
+
+    # All weighted employees recommend BUY
+    for emp in [employee_engine.vwap_emp, employee_engine.momentum, employee_engine.liquidity, 
+                employee_engine.oi_emp, employee_engine.pcr_emp, employee_engine.greeks, employee_engine.option_flow]:
+        emp.latest_results[symbol] = {"recommendation": "BUY", "confidence": 85.0}
+
+    # Advisory employees
+    employee_engine.news_emp.latest_results[symbol] = {"recommendation": "BUY", "confidence": 75.0}
+    employee_engine.calendar.latest_results[symbol] = {"recommendation": "BUY", "confidence": 75.0}
+    employee_engine.event_risk.latest_results[symbol] = {"recommendation": "BUY", "confidence": 75.0}
     
     # Simulate a Scanner Match event
     print("Publishing simulated scanner match...")
