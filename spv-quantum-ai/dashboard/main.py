@@ -1,15 +1,17 @@
 import asyncio
 from contextlib import asynccontextmanager
 from typing import Any, Dict, List, Optional
-from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException
+from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from core.bus import event_bus, EventModel
 from core.logging import get_logger
+from core.middleware import CorrelationIDMiddleware, RequestLoggingMiddleware
+from core.startup import validate_environment, run_startup_checks, cache_startup_results, get_cached_startup_results
 from database.connection import init_db, get_db_session
 from database.models import OrderModel, TradeModel
 from agents.manager import AgentManager
@@ -66,6 +68,12 @@ async def ws_event_broadcaster(event: EventModel) -> None:
 async def lifespan(app: FastAPI):
     """Orchestrates system startup and shutdown procedures."""
     logger.info("Initializing SPV Quantum AI Core Engine...")
+
+    # 0. Validate environment variables before anything else
+    try:
+        validate_environment()
+    except Exception as env_err:
+        logger.warning(f"Environment validation warning: {env_err}")
     
     # 1. Setup DB
     await init_db()
@@ -168,6 +176,11 @@ async def lifespan(app: FastAPI):
     app.state.employee_engine = employee_engine
     
     logger.info("Engine fully operational.")
+
+    # Run startup readiness checks and cache results
+    _, checks = await run_startup_checks()
+    cache_startup_results(checks)
+
     yield
     
     # Clean shutdown
@@ -199,6 +212,34 @@ async def lifespan(app: FastAPI):
     logger.info("Core engine terminated.")
 
 app = FastAPI(title="SPV Quantum AI Operating System", lifespan=lifespan)
+
+# ── Middleware ────────────────────────────────────────────────────────────────
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(CorrelationIDMiddleware)
+
+# ── Global Exception Handlers ─────────────────────────────────────────────────
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Catches unhandled exceptions and returns a structured 500 response."""
+    logger.error(
+        f"Unhandled exception on {request.method} {request.url.path}: {exc}",
+        path=request.url.path,
+        method=request.method,
+        error=str(exc),
+    )
+    return JSONResponse(
+        status_code=500,
+        content={"error": "INTERNAL_SERVER_ERROR", "message": str(exc)},
+    )
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Returns a consistent JSON body for all HTTPExceptions."""
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": "HTTP_ERROR", "message": exc.detail, "status_code": exc.status_code},
+    )
 
 # Mount static files folder
 import os
@@ -332,6 +373,17 @@ async def place_order(order: OrderRequest):
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await ws_manager.connect(websocket)
+    
+    async def _keepalive() -> None:
+        """Sends a ping frame every 30 seconds to keep the connection alive."""
+        while True:
+            await asyncio.sleep(30)
+            try:
+                await websocket.send_json({"topic": "ping", "sender": "server", "timestamp": "", "data": {}})
+            except Exception:
+                break
+    
+    keepalive_task = asyncio.create_task(_keepalive())
     try:
         while True:
             await websocket.receive_text()
@@ -340,6 +392,12 @@ async def websocket_endpoint(websocket: WebSocket):
     except Exception as e:
         logger.error("WebSocket endpoint error", error=str(e))
         await ws_manager.disconnect(websocket)
+    finally:
+        keepalive_task.cancel()
+        try:
+            await keepalive_task
+        except asyncio.CancelledError:
+            pass
 
 # HTML Dashboard Routing
 @app.get("/")
@@ -949,9 +1007,10 @@ async def estimate_charges(req: EstimateRequest):
         "total_charges": round(total, 4)
     }
 
-@app.get("/api/broker/status")
-async def get_broker_status():
-    """Returns details about active broker, connection state, health, funds, margin, orders and positions."""
+
+@app.get("/api/broker/full-status")
+async def get_broker_full_status():
+    """Returns full details about active broker: connection state, health, funds, margin, orders and positions."""
     from brokers import broker_engine
     from brokers.resolver import BrokerResolver
     from brokers.manager import broker_manager
@@ -1003,6 +1062,7 @@ async def get_broker_status():
         "positions": pos_list
     }
 
+
 @app.get("/api/safety/status")
 async def get_safety_status():
     """Returns details about Safety Status, Today's Risk, Current Exposure, Emergency, Trailing and Hidden SL."""
@@ -1038,11 +1098,161 @@ async def resume_trading():
     await safety_engine.manager.emergency.resume_trading()
     return {"status": "success", "message": "Trading resumed."}
 
+@app.get("/api/volume_intelligence/status")
+async def get_volume_intelligence_status(symbol: Optional[str] = None):
+    """Returns the latest volume intelligence analysis results."""
+    from employees.engine import employee_engine
+    from datetime import datetime, timezone
+    vi = employee_engine.volume_intelligence
+    if symbol:
+        res = vi.latest_results.get(symbol)
+        if not res:
+            return {
+                "symbol": symbol,
+                "volume_score": 0.0,
+                "rvol": 1.0,
+                "volume_trend": "NEUTRAL",
+                "confirmation_status": "NEUTRAL",
+                "confidence": 50.0,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        return res
+    return vi.latest_results
+
+
+@app.get("/api/option_flow/status")
+async def get_option_flow_status(symbol: Optional[str] = None):
+    """Returns the latest option flow analysis results."""
+    from employees.engine import employee_engine
+    from datetime import datetime, timezone
+    of_mgr = employee_engine.option_flow
+    if symbol:
+        res = of_mgr.latest_results.get(symbol)
+        if not res:
+            return {
+                "underlying": symbol,
+                "atm_strike": 0.0,
+                "ce_strength": 0.0,
+                "pe_strength": 0.0,
+                "pcr": 1.0,
+                "option_flow_score": 50.0,
+                "classification": "SIDEWAYS",
+                "confidence": 50.0,
+                "strength": 0.0,
+                "risk": "MEDIUM",
+                "recommendation": "WAIT",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        return res
+    return of_mgr.latest_results
+
+
+@app.get("/api/trend_intelligence/status")
+async def get_trend_intelligence_status(symbol: Optional[str] = None):
+    """Returns the latest trend intelligence analysis results."""
+    from employees.engine import employee_engine
+    from datetime import datetime, timezone
+    trend_mgr = employee_engine.trend_intelligence
+    if symbol:
+        res = trend_mgr.latest_results.get(symbol)
+        if not res:
+            return {
+                "symbol": symbol,
+                "timeframe": "1m",
+                "trend": "NO TRADE",
+                "confidence": 0.0,
+                "trend_strength": "Weak Trend",
+                "momentum_score": 50.0,
+                "direction": "NEUTRAL",
+                "recommendation": "WAIT",
+                "ema_alignment": "NONE",
+                "vwap_status": "NONE",
+                "adx": 0.0,
+                "rsi": 50.0,
+                "macd": {"macd": 0.0, "signal": 0.0, "histogram": 0.0},
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+        return res
+    return trend_mgr.latest_results
+
+
 @app.get("/api/health/status")
 async def get_system_health():
     """Returns details about overall system health, uptime, cpu/memory usage, latency and queue states."""
     from health import system_health_engine
     return await system_health_engine.get_dashboard_metrics()
+
+
+class SystemSettingsUpdate(BaseModel):
+    active_broker: str
+    client_id: str
+    api_key: str
+    max_daily_loss: float
+    max_exposure: float
+
+
+@app.get("/api/settings")
+async def get_system_settings():
+    """Returns the current system, broker and risk configurations from settings.yaml."""
+    from core.config import settings
+    
+    brokers_cfg = settings.yaml_config.get("brokers", {})
+    kotak_cfg = brokers_cfg.get("kotak_neo", {})
+    risk_cfg = settings.yaml_config.get("risk_limits", {})
+    
+    return {
+        "active_broker": brokers_cfg.get("active", "paper_broker"),
+        "client_id": kotak_cfg.get("client_id", ""),
+        "api_key": kotak_cfg.get("api_key", ""),
+        "max_daily_loss": risk_cfg.get("daily_loss_limit_usd", 500.0),
+        "max_exposure": risk_cfg.get("max_position_size_usd", 10000.0)
+    }
+
+
+@app.post("/api/settings")
+async def update_system_settings(payload: SystemSettingsUpdate):
+    """Updates settings.yaml with the new credentials/broker selections and reloads configuration in memory."""
+    from core.config import settings
+    from core.bus import event_bus, EventModel
+    
+    try:
+        if payload.active_broker not in ["paper_broker", "kotak_neo"]:
+            raise HTTPException(status_code=400, detail="Invalid active broker choice.")
+            
+        if "brokers" not in settings.yaml_config:
+            settings.yaml_config["brokers"] = {}
+        settings.yaml_config["brokers"]["active"] = payload.active_broker
+        
+        if "kotak_neo" not in settings.yaml_config["brokers"]:
+            settings.yaml_config["brokers"]["kotak_neo"] = {}
+        settings.yaml_config["brokers"]["kotak_neo"]["enabled"] = (payload.active_broker == "kotak_neo")
+        settings.yaml_config["brokers"]["kotak_neo"]["client_id"] = payload.client_id
+        settings.yaml_config["brokers"]["kotak_neo"]["api_key"] = payload.api_key
+        
+        if "risk_limits" not in settings.yaml_config:
+            settings.yaml_config["risk_limits"] = {}
+        settings.yaml_config["risk_limits"]["daily_loss_limit_usd"] = payload.max_daily_loss
+        settings.yaml_config["risk_limits"]["max_position_size_usd"] = payload.max_exposure
+        
+        settings.save_yaml_config()
+        
+        from risk.engine import risk_engine
+        risk_engine.config = settings.yaml_config.get("risk_limits", {})
+        
+        await event_bus.publish(EventModel(
+            event_type="system_config_updated",
+            source_agent="dashboard_api",
+            payload={
+                "active_broker": payload.active_broker,
+                "daily_loss_limit_usd": payload.max_daily_loss,
+                "max_position_size_usd": payload.max_exposure
+            }
+        ))
+        
+        return {"success": True, "message": "Settings updated and reloaded successfully."}
+    except Exception as ex:
+        raise HTTPException(status_code=500, detail=str(ex))
+
 
 @app.get("/api/employees")
 async def get_employees(tenant_id: Optional[str] = None):
@@ -1084,12 +1294,68 @@ async def set_employee_allocation(code: str, allocation: float):
     return {"status": "success", "message": f"Capital allocation updated for employee '{code}'."}
 
 
+# ── Production Readiness & Metrics Endpoints ─────────────────────────────────
+
+import time as _time
+import psutil as _psutil
+
+@app.get("/api/readiness")
+async def get_readiness():
+    """
+    Production readiness probe.
+    Returns 200 when all startup checks passed, 503 when any check failed.
+    Used by load balancers and container orchestrators (K8s readinessProbe).
+    """
+    checks, startup_ts = get_cached_startup_results()
+    all_passed = all(c.get("status") == "PASS" for c in checks) if checks else True
+    return JSONResponse(
+        status_code=200 if all_passed else 503,
+        content={
+            "ready": all_passed,
+            "startup_timestamp": startup_ts,
+            "uptime_sec": round(_time.time() - startup_ts, 1) if startup_ts else 0,
+            "checks": checks,
+        },
+    )
 
 
+@app.get("/api/metrics")
+async def get_system_metrics():
+    """
+    System metrics endpoint for monitoring.
+    Returns CPU, memory, event bus queue size, and active WebSocket connections.
+    """
+    proc = _psutil.Process()
+    mem = proc.memory_info()
+    cpu_pct = _psutil.cpu_percent(interval=None)
+    mem_pct = _psutil.virtual_memory().percent
 
+    queue_size = event_bus._queue.qsize() if event_bus._queue else 0
+    ws_connections = len(ws_manager.active_connections)
 
+    from execution.engine import execution_engine
+    exec_metrics = await execution_engine.get_dashboard_metrics()
 
-
+    return {
+        "system": {
+            "cpu_usage_pct": cpu_pct,
+            "memory_usage_pct": mem_pct,
+            "process_rss_mb": round(mem.rss / (1024 * 1024), 2),
+            "process_vms_mb": round(mem.vms / (1024 * 1024), 2),
+        },
+        "event_bus": {
+            "queue_size": queue_size,
+            "is_running": event_bus._is_running,
+            "inflight_tasks": len(event_bus._inflight_tasks),
+        },
+        "websocket": {
+            "active_connections": ws_connections,
+        },
+        "execution": {
+            "queue_size": exec_metrics.get("execution_queue_size", 0),
+            "broker_response_time_ms": exec_metrics.get("broker_response_time_ms", 0.0),
+        },
+    }
 
 
 

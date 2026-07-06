@@ -20,6 +20,42 @@ class EmployeeType(str, Enum):
     COMMODITY_SPECIALIST = "Commodity Specialist"
     CURRENCY_SPECIALIST = "Currency Specialist"
     PORTFOLIO_MANAGER = "Portfolio Manager"
+    VOLUME_INTELLIGENCE = "Volume Intelligence Specialist"
+    OPTION_FLOW = "Option Flow Specialist"
+    TREND_INTELLIGENCE = "Trend Intelligence Specialist"
+    
+    # Market Intelligence Department
+    MOMENTUM = "Momentum Employee"
+    VWAP = "VWAP Employee"
+    MARKET_REGIME = "Market Regime Employee"
+    
+    # Options Intelligence Department
+    OPTION_OI = "OI Employee"
+    OPTION_PCR = "PCR Employee"
+    OPTION_GREEKS = "Greeks Employee"
+    OPTION_MAX_PAIN = "Max Pain Employee"
+    
+    # Institutional Department
+    INSTITUTIONAL_SMART_MONEY = "Smart Money Employee"
+    INSTITUTIONAL_LIQUIDITY = "Liquidity Employee"
+    INSTITUTIONAL_ORDER_FLOW = "Order Flow Employee"
+    
+    # Risk Department
+    RISK_MONITOR = "Risk Employee"
+    RISK_POSITION_SIZING = "Position Sizing Employee"
+    RISK_CAPITAL_PROTECTION = "Capital Protection Employee"
+    RISK_EXPOSURE = "Exposure Employee"
+    
+    # News Department
+    NEWS_SENTIMENT = "News Employee"
+    ECONOMIC_CALENDAR = "Economic Calendar Employee"
+    EVENT_RISK = "Event Risk Employee"
+    
+    # Execution Department
+    EXECUTION = "Execution Employee"
+    PORTFOLIO = "Portfolio Employee"
+    PAPER_TRADING = "Paper Trading Employee"
+    
     CUSTOM = "Custom Employee"
 
 class EmployeeProfile(BaseModel):
@@ -63,6 +99,22 @@ class EmployeeProfile(BaseModel):
     trade_history: List[Dict[str, Any]] = Field(default_factory=list)
     strategy_pnl: Dict[str, float] = Field(default_factory=dict)
     
+    # Monitoring Metrics
+    is_active: bool = True
+    health_status: str = "HEALTHY"
+    last_decision: str = "NONE"
+    last_decision_confidence: float = 0.0
+    total_signals: int = 0
+    correct_signals: int = 0
+    incorrect_signals: int = 0
+    accuracy_pct: float = 100.0
+    last_execution_time_ms: float = 0.0
+    avg_execution_time_ms: float = 0.0
+    error_count: int = 0
+    last_error: Optional[str] = None
+    heartbeat_timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    accuracy_history: List[Dict[str, Any]] = Field(default_factory=list)
+
     tenant_id: Optional[str] = None  # Future SaaS/multi-tenant support
 
 class EmployeeActivatedEvent(BaseModel):

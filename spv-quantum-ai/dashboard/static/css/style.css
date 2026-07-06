@@ -537,3 +537,165 @@ button:active { transform: scale(0.97); }
         grid-template-columns: 1fr;
     }
 }
+
+/* Navigation Tabs Styling */
+.nav-tabs {
+    display: flex;
+    gap: 0.5rem;
+    background: rgba(255, 255, 255, 0.03);
+    padding: 0.25rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-glass);
+}
+.tab-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 0.5rem 1rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all 0.2s ease-in-out;
+}
+.tab-btn:hover {
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.05);
+}
+.tab-btn.active {
+    color: var(--bg-base);
+    background: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+    font-weight: 600;
+    box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+}
+
+/* Tab Panels */
+.tab-panel {
+    display: none;
+    animation: fadeIn 0.3s ease;
+}
+.tab-panel.active {
+    display: block;
+}
+
+/* Monitoring Panel Grid */
+.monitoring-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 1.25rem;
+    margin-top: 1rem;
+}
+
+.employee-monitor-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-glass);
+    border-radius: 12px;
+    padding: 1.25rem;
+    position: relative;
+    overflow: hidden;
+    backdrop-filter: blur(12px);
+    transition: all 0.3s ease;
+}
+.employee-monitor-card:hover {
+    border-color: rgba(0, 242, 254, 0.25);
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+    transform: translateY(-2px);
+}
+.employee-monitor-card.failed {
+    border-color: rgba(255, 59, 48, 0.3);
+}
+
+.monitor-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border-glass);
+    padding-bottom: 0.75rem;
+    margin-bottom: 0.75rem;
+}
+
+.monitor-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+.monitor-title img, .monitor-avatar-placeholder {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+}
+
+.status-badge {
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+}
+.status-badge.active {
+    background: rgba(0, 245, 160, 0.15);
+    color: var(--accent-green);
+}
+.status-badge.inactive {
+    background: rgba(107, 114, 128, 0.15);
+    color: var(--text-muted);
+}
+.status-badge.failed {
+    background: rgba(255, 59, 48, 0.15);
+    color: var(--accent-red);
+}
+
+.monitor-metrics-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    font-size: 0.85rem;
+    margin-bottom: 0.75rem;
+}
+.monitor-metric {
+    display: flex;
+    flex-direction: column;
+}
+.monitor-metric span.lbl {
+    color: var(--text-secondary);
+    font-size: 0.75rem;
+    margin-bottom: 0.15rem;
+}
+.monitor-metric span.val {
+    font-weight: 500;
+}
+
+.monitor-footer {
+    border-top: 1px solid var(--border-glass);
+    padding-top: 0.75rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+/* Charts container */
+.charts-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1.5rem;
+    margin-top: 1.5rem;
+}
+.chart-box {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-glass);
+    border-radius: 12px;
+    padding: 1.25rem;
+    height: 350px;
+}
+@media (max-width: 1024px) {
+    .charts-grid {
+        grid-template-columns: 1fr;
+    }
+}

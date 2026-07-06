@@ -68,6 +68,18 @@ class TradeJournalEngine:
                     # Calculate entry charges
                     entry_chg = await charges_engine.calculate_charges(order_id, symbol, side, qty, price, segment)
                     
+                    # Find participating employee codes
+                    from employees.engine import employee_engine
+                    exec_emp = order_data.get("employee_code") or employee_engine.manager.active_code
+                    codes = [exec_emp] if exec_emp else []
+                    if segment == "Options":
+                        if "EMP-OPT" not in codes and "EMP-OPT" in employee_engine.manager.profiles:
+                            codes.append("EMP-OPT")
+                        if "EMP-OFT" not in codes and "EMP-OFT" in employee_engine.manager.profiles:
+                            codes.append("EMP-OFT")
+                    if "EMP-VOL" not in codes and "EMP-VOL" in employee_engine.manager.profiles:
+                        codes.append("EMP-VOL")
+
                     # New Entry TradeRecord
                     trade = TradeRecord(
                         order_id=order_id,
@@ -77,6 +89,7 @@ class TradeJournalEngine:
                         side=side,
                         quantity=qty,
                         entry_price=price,
+                        employee_codes=codes,
                         execution_latency=latency,
                         strategy_name=order_data.get("strategy_name", "trend_strategy"),
                         scanner_name=order_data.get("scanner_name"),

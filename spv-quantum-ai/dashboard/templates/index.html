@@ -8,6 +8,8 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <!-- Lucide Icons for clean visuals -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Chart.js for premium visualization charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
 
@@ -15,8 +17,16 @@
     <header class="top-bar">
         <div class="logo-area">
             <span class="status-indicator" id="status-indicator"></span>
-            <h1>SPV QUANTUM AI <span class="term-ver">v2.0 // RC-1</span></h1>
+            <h1>SPV QUANTUM AI <span class="term-ver">v2.0 // RC-2</span></h1>
         </div>
+        
+        <nav class="nav-tabs">
+            <button class="tab-btn active" id="btn-tab-terminal" onclick="switchTab('tab-terminal')">Trading Terminal</button>
+            <button class="tab-btn" id="btn-tab-monitoring" onclick="switchTab('tab-monitoring')">AI Employee Monitor</button>
+            <button class="tab-btn" id="btn-tab-decisions" onclick="switchTab('tab-decisions')">Decision Log</button>
+            <button class="tab-btn" id="btn-tab-performance" onclick="switchTab('tab-performance')">Performance &amp; Charts</button>
+            <button class="tab-btn" id="btn-tab-settings" onclick="switchTab('tab-settings')">System Settings</button>
+        </nav>
         
         <div class="top-bar-metrics">
             <div class="top-metric">
@@ -51,19 +61,19 @@
         <section class="summary-cards-container">
             <div class="metric-card">
                 <span class="label">Available Capital</span>
-                <span class="value" id="card-capital">$0.00</span>
+                <span class="value" id="card-capital">₹0.00</span>
             </div>
             <div class="metric-card">
                 <span class="label">Portfolio Value</span>
-                <span class="value" id="card-portfolio-val">$0.00</span>
+                <span class="value" id="card-portfolio-val">₹0.00</span>
             </div>
             <div class="metric-card">
                 <span class="label">Today's P&amp;L</span>
-                <span class="value" id="card-today-pnl">$0.00</span>
+                <span class="value" id="card-today-pnl">₹0.00</span>
             </div>
             <div class="metric-card">
                 <span class="label">Total P&amp;L</span>
-                <span class="value" id="card-total-pnl">$0.00</span>
+                <span class="value" id="card-total-pnl">₹0.00</span>
             </div>
             <div class="metric-card">
                 <span class="label">Open Positions</span>
@@ -87,12 +97,14 @@
             </div>
             <div class="metric-card">
                 <span class="label">Margin Used</span>
-                <span class="value" id="card-margin">$0.00</span>
+                <span class="value" id="card-margin">₹0.00</span>
             </div>
         </section>
 
-        <!-- MAIN LAYOUT GRID -->
-        <div class="terminal-layout-grid">
+        <!-- TAB 1: TERMINAL -->
+        <div id="tab-terminal" class="tab-panel active">
+            <!-- MAIN LAYOUT GRID -->
+            <div class="terminal-layout-grid">
             
             <!-- COLUMN 1: Live Market & AI Employee Identity -->
             <div class="grid-col flex-col">
@@ -227,6 +239,51 @@
                     </div>
                 </div>
 
+                <!-- VOLUME INTELLIGENCE PANEL -->
+                <div class="card">
+                    <h2>Volume Intelligence</h2>
+                    <div class="details-grid-risk">
+                        <div><strong>Volume Status:</strong> <span class="badge" id="vol-status">NEUTRAL</span></div>
+                        <div><strong>Volume Score:</strong> <span id="vol-score">0.00</span></div>
+                        <div><strong>RVOL:</strong> <span id="vol-rvol">1.0000</span></div>
+                        <div><strong>Volume Trend:</strong> <span id="vol-trend">NEUTRAL</span></div>
+                        <div><strong>Confidence:</strong> <span id="vol-confidence">50%</span></div>
+                    </div>
+                </div>
+
+                <!-- OPTION FLOW PANEL -->
+                <div class="card" id="option-flow-card">
+                    <h2>Option Flow Intelligence</h2>
+                    <div class="details-grid-risk">
+                        <div><strong>ATM Strike:</strong> <span id="of-atm">-</span></div>
+                        <div><strong>CE Strength:</strong> <span id="of-ce-strength">0.00</span></div>
+                        <div><strong>PE Strength:</strong> <span id="of-pe-strength">0.00</span></div>
+                        <div><strong>PCR:</strong> <span id="of-pcr">1.0000</span></div>
+                        <div><strong>Option Flow Score:</strong> <span id="of-score">50.00</span></div>
+                        <div><strong>Bullish %:</strong> <span id="of-bullish-pct">50%</span></div>
+                        <div><strong>Bearish %:</strong> <span id="of-bearish-pct">50%</span></div>
+                        <div><strong>Volume Ratio:</strong> <span id="of-vol-ratio">1.00</span></div>
+                        <div><strong>OI Ratio:</strong> <span id="of-oi-ratio">1.00</span></div>
+                        <div><strong>Confidence:</strong> <span id="of-confidence">50%</span></div>
+                        <div><strong>Recommendation:</strong> <span class="badge" id="of-recommendation">WAIT</span></div>
+                    </div>
+                </div>
+
+                <!-- TREND INTELLIGENCE PANEL -->
+                <div class="card" id="trend-intel-card">
+                    <h2>Trend Intelligence</h2>
+                    <div class="details-grid-risk">
+                        <div><strong>Trend:</strong> <span class="badge" id="trend-classification">SIDEWAYS</span></div>
+                        <div><strong>EMA Alignment:</strong> <span id="trend-ema-alignment">NONE</span></div>
+                        <div><strong>VWAP Status:</strong> <span id="trend-vwap-status">NONE</span></div>
+                        <div><strong>ADX Strength:</strong> <span id="trend-adx">0.00</span></div>
+                        <div><strong>RSI:</strong> <span id="trend-rsi">50.00</span></div>
+                        <div><strong>MACD Hist:</strong> <span id="trend-macd-hist">0.00</span></div>
+                        <div><strong>Confidence:</strong> <span id="trend-confidence">0%</span></div>
+                        <div><strong>Recommendation:</strong> <span class="badge" id="trend-recommendation">WAIT</span></div>
+                    </div>
+                </div>
+
                 <!-- SYSTEM TELEMETRY -->
                 <div class="card">
                     <h2>System Telemetry</h2>
@@ -270,11 +327,167 @@
                     </div>
                 </div>
             </div>
-
         </div>
+        </div>
+
+        <!-- TAB 2: AI EMPLOYEE MONITOR -->
+        <div id="tab-monitoring" class="tab-panel">
+            <div class="card-header-actions" style="margin-top: 1rem; margin-bottom: 1rem;">
+                <h2>AI Employee Monitoring Terminal</h2>
+                <span class="badge text-green">Auto-Monitoring Heartbeats: Active</span>
+            </div>
+            
+            <div class="monitoring-grid" id="monitor-cards-container">
+                <!-- Dynamically populated employee monitor cards -->
+            </div>
+        </div>
+
+        <!-- TAB 3: DECISION LOG -->
+        <div id="tab-decisions" class="tab-panel">
+            <div class="card" style="margin-top: 1rem;">
+                <div class="card-header-actions">
+                    <h2>AI Employee Decision &amp; Audit Log</h2>
+                    <div style="display: flex; gap: 0.5rem;">
+                        <input type="text" id="decisions-search" placeholder="Filter by symbol/employee..." style="padding: 0.4rem 0.8rem; border-radius: 4px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
+                        <button class="btn-action" onclick="clearDecisionLog()">Clear Log</button>
+                    </div>
+                </div>
+                
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Timestamp</th>
+                                <th>Employee</th>
+                                <th>Symbol</th>
+                                <th>Decision</th>
+                                <th>Confidence</th>
+                                <th>Latency (ms)</th>
+                                <th>Details / Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="decisions-log-body">
+                            <tr>
+                                <td colspan="7" class="text-center text-muted">No decisions logged. Waiting for event triggers...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 4: PERFORMANCE & CHARTS -->
+        <div id="tab-performance" class="tab-panel">
+            <div class="card-header-actions" style="margin-top: 1rem; margin-bottom: 0.5rem;">
+                <h2>AI Employee Analytics &amp; Accuracy Charts</h2>
+            </div>
+            
+            <!-- Charts Row -->
+            <div class="charts-grid">
+                <div class="chart-box" style="grid-column: 1 / -1; height: 350px;">
+                    <h3 style="margin-bottom: 1rem; font-size: 1rem; font-weight: 600;">System Cumulative Equity Curve (INR ₹)</h3>
+                    <canvas id="chart-system-equity" style="max-height: 270px;"></canvas>
+                </div>
+                <div class="chart-box">
+                    <h3 style="margin-bottom: 1rem; font-size: 1rem; font-weight: 600;">Employee Net P&amp;L Contribution (INR ₹)</h3>
+                    <canvas id="chart-employee-pnl" style="max-height: 270px;"></canvas>
+                </div>
+                <div class="chart-box">
+                    <h3 style="margin-bottom: 1rem; font-size: 1rem; font-weight: 600;">Employee Signal Accuracy Over Time (%)</h3>
+                    <canvas id="chart-employee-accuracy" style="max-height: 270px;"></canvas>
+                </div>
+            </div>
+            
+            <!-- Detailed Stats Table -->
+            <div class="card" style="margin-top: 1.5rem;">
+                <h2>Detailed Employee Accuracy Summary</h2>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Employee</th>
+                                <th>Type</th>
+                                <th>Total Signals</th>
+                                <th>Correct Signals</th>
+                                <th>Incorrect Signals</th>
+                                <th>Accuracy %</th>
+                                <th>Avg Latency (ms)</th>
+                                <th>Heartbeat</th>
+                                <th>Health Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="performance-table-body">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 5: SYSTEM SETTINGS -->
+        <div id="tab-settings" class="tab-panel">
+            <div class="card" style="margin-top: 1rem; max-width: 600px; margin-left: auto; margin-right: auto;">
+                <div class="card-header-actions">
+                    <h2>⚙️ System &amp; Broker Settings</h2>
+                </div>
+                
+                <form id="settings-form" onsubmit="saveSystemSettings(event)" style="display: flex; flex-direction: column; gap: 1.2rem; padding: 0.5rem;">
+                    
+                    <!-- Broker Select -->
+                    <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                        <label for="settings-active-broker" style="font-weight: 600; font-size: 0.9rem; color: var(--accent-blue);">Active Trading Environment</label>
+                        <select id="settings-active-broker" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.4); color: var(--text-primary); font-size: 0.9rem;" onchange="toggleCredentialsVisibility()">
+                            <option value="paper_broker">Paper Trading (Simulation Mode)</option>
+                            <option value="kotak_neo">Kotak Neo (Live API Integration)</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Kotak Credentials Group -->
+                    <div id="kotak-creds-group" style="display: flex; flex-direction: column; gap: 1.2rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem;">
+                        <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--accent-orange);">Kotak Neo API Credentials</h3>
+                        
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-client-id" style="font-size: 0.85rem; color: var(--text-secondary);">Client ID (Mobile Number / UCC)</label>
+                            <input type="text" id="settings-client-id" placeholder="e.g. 9876543210" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                        </div>
+                        
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-api-key" style="font-size: 0.85rem; color: var(--text-secondary);">API Key (Consumer Key)</label>
+                            <input type="password" id="settings-api-key" placeholder="Enter Developer Consumer Key" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                        </div>
+                    </div>
+                    
+                    <!-- Risk & Limits Group -->
+                    <div style="display: flex; flex-direction: column; gap: 1.2rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem; margin-bottom: 0.5rem;">
+                        <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--accent-green);">Capital &amp; Risk Protection Limits</h3>
+                        
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                                <label for="settings-max-daily-loss" style="font-size: 0.85rem; color: var(--text-secondary);">Daily Loss Limit (₹)</label>
+                                <input type="number" step="1" id="settings-max-daily-loss" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                            </div>
+                            
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                                <label for="settings-max-exposure" style="font-size: 0.85rem; color: var(--text-secondary);">Max Position Size (₹)</label>
+                                <input type="number" step="1" id="settings-max-exposure" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Form Actions -->
+                    <div style="display: flex; justify-content: flex-end; gap: 0.8rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem;">
+                        <span id="settings-status-msg" style="margin-right: auto; align-self: center; font-size: 0.85rem; font-weight: 500;"></span>
+                        <button type="button" class="btn-action" style="background: rgba(255,255,255,0.05); color: var(--text-secondary);" onclick="fetchSystemSettings()">Reset Fields</button>
+                        <button type="submit" class="btn-action" style="background: var(--gradient-blue); color: #000; font-weight: 600;">Save &amp; Reload Settings</button>
+                    </div>
+                    
+                </form>
+            </div>
+        </div>
+
     </div>
 
     <!-- Load App Controller Script -->
-    <script src="/static/js/app.js"></script>
+    <script src="/static/js/app.js?v=2.0.3"></script>
 </body>
 </html>

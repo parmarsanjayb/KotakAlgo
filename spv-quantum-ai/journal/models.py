@@ -14,6 +14,7 @@ class TradeRecord(BaseModel):
     symbol: str
     side: str = "BUY"
     strategy_name: Optional[str] = None
+    employee_codes: List[str] = Field(default_factory=list)
     scanner_name: Optional[str] = None
     market_regime: Optional[str] = None
     decision_score: Optional[float] = None

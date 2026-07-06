@@ -52,10 +52,8 @@ class SystemHealthEngine:
 
     async def _self_heartbeat_loop(self) -> None:
         while self._running:
-            self.record_heartbeat("Safety Engine")  # Mock pings for test coverage
-            self.record_heartbeat("Execution Engine")
-            self.record_heartbeat("Portfolio Engine")
-            self.record_heartbeat("Market Data Engine")
+            for svc in self.manager.heartbeat_mgr.registered_services:
+                self.record_heartbeat(svc)
             await asyncio.sleep(2.0)
 
     async def get_dashboard_metrics(self) -> Dict[str, Any]:
@@ -73,8 +71,12 @@ class SystemHealthEngine:
         failed_count = sum(1 for status in service_statuses.values() if status == ServiceStatus.FAILED)
         degraded_count = sum(1 for status in service_statuses.values() if status == ServiceStatus.DEGRADED)
         
+        # Check AI Employees health
+        from employees import employee_engine
+        employees_failed = any(p.health_status == "FAILED" for p in employee_engine.manager.profiles.values())
+        
         overall_status = "HEALTHY"
-        if failed_count > 0 or not broker_ok or not internet_ok:
+        if failed_count > 0 or not broker_ok or not internet_ok or employees_failed:
             overall_status = "FAILED"
         elif degraded_count > 0:
             overall_status = "DEGRADED"

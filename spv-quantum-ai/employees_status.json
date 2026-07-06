@@ -1,0 +1,1527 @@
+{
+  "active_employee_code": null,
+  "active_employee_name": null,
+  "employees": [
+    {
+      "employee_code": "EMP-VOL",
+      "name": "Default Volume Intelligence Specialist",
+      "avatar": "avatar_volume.png",
+      "description": "Volume trend validation, Spike detection, and Breakout confirmation. Does NOT execute trades directly.",
+      "state": "ACTIVE",
+      "employee_type": "Volume Intelligence Specialist",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "RVOL: 1.0",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248166+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options",
+          "Commodity"
+        ],
+        "allowed_products": [
+          "CNC",
+          "NRML",
+          "MIS"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "daily"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-OFT",
+      "name": "Default Option Flow Specialist",
+      "avatar": "avatar_option_flow.png",
+      "description": "ATM Option Chain order flow tracking, PCR, build-ups, and smart money direction bias. Does NOT execute trades directly.",
+      "state": "ACTIVE",
+      "employee_type": "Option Flow Specialist",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 0.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248311+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Options"
+        ],
+        "allowed_products": [
+          "NRML",
+          "MIS"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m"
+        ],
+        "confidence_threshold": 60.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-TRD",
+      "name": "Default Trend Intelligence Specialist",
+      "avatar": "avatar_trend.png",
+      "description": "Market Trend validation, EMA alignments, VWAP status, ADX/RSI momentum checks. Does NOT execute trades directly.",
+      "state": "ACTIVE",
+      "employee_type": "Trend Intelligence Specialist",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "NO TRADE",
+      "last_decision_confidence": 0.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248411+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "NRML",
+          "MIS"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "daily"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-MOM",
+      "name": "Default Momentum Employee",
+      "avatar": "avatar_momentum.png",
+      "description": "Tracks RSI, StochRSI, and CCI momentum indicators.",
+      "state": "ACTIVE",
+      "employee_type": "Momentum Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 60.090199999999996,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248505+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-VWP",
+      "name": "Default VWAP Employee",
+      "avatar": "avatar_vwap.png",
+      "description": "Tracks price status in relation to VWAP.",
+      "state": "ACTIVE",
+      "employee_type": "VWAP Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "SELL",
+      "last_decision_confidence": 60.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248597+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-RGM",
+      "name": "Default Market Regime Employee",
+      "avatar": "avatar_regime.png",
+      "description": "Tracks regime transitions (Trending, Rangebound, Gap, etc.).",
+      "state": "ACTIVE",
+      "employee_type": "Market Regime Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "Sideways",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248684+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-OIE",
+      "name": "Default OI Employee",
+      "avatar": "avatar_oi.png",
+      "description": "Analyzes Open Interest changes in Calls vs Puts.",
+      "state": "ACTIVE",
+      "employee_type": "OI Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248771+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-PCR",
+      "name": "Default PCR Employee",
+      "avatar": "avatar_pcr.png",
+      "description": "Monitors Put-Call Ratio (PCR) thresholds.",
+      "state": "ACTIVE",
+      "employee_type": "PCR Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248858+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-GRK",
+      "name": "Default Greeks Employee",
+      "avatar": "avatar_greeks.png",
+      "description": "Monitors Delta, Gamma, Theta, and Vega risk indicators.",
+      "state": "ACTIVE",
+      "employee_type": "Greeks Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 65.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.248943+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-MPN",
+      "name": "Default Max Pain Employee",
+      "avatar": "avatar_max_pain.png",
+      "description": "Tracks the strike price with maximum pain for option buyers.",
+      "state": "ACTIVE",
+      "employee_type": "Max Pain Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 60.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249028+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Options"
+        ],
+        "allowed_products": [
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-SME",
+      "name": "Default Smart Money Employee",
+      "avatar": "avatar_smart_money.png",
+      "description": "Tracks smart money blocks and institutional activities.",
+      "state": "ACTIVE",
+      "employee_type": "Smart Money Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249129+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "daily"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-LQD",
+      "name": "Default Liquidity Employee",
+      "avatar": "avatar_liquidity.png",
+      "description": "Monitors depth of bid/ask queues and market liquidity.",
+      "state": "ACTIVE",
+      "employee_type": "Liquidity Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 60.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249214+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-OFL",
+      "name": "Default Order Flow Employee",
+      "avatar": "avatar_order_flow.png",
+      "description": "Monitors real-time institutional transaction flow delta.",
+      "state": "ACTIVE",
+      "employee_type": "Order Flow Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 65.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249299+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-DEL",
+      "name": "Default Delivery Employee",
+      "avatar": "avatar_delivery.png",
+      "description": "Long-term delivery investment, focuses on value holding.",
+      "state": "ACTIVE",
+      "employee_type": "Delivery Investor",
+      "capital_allocation": 300000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "SELL",
+      "last_decision_confidence": 55.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249381+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 50000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity"
+        ],
+        "allowed_products": [
+          "CNC"
+        ],
+        "allowed_timeframes": [
+          "daily",
+          "weekly"
+        ],
+        "confidence_threshold": 55.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-RSK",
+      "name": "Default Risk Employee",
+      "avatar": "avatar_risk_emp.png",
+      "description": "Monitors total portfolio drawdown limits and risk rules.",
+      "state": "ACTIVE",
+      "employee_type": "Risk Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249462+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-PZS",
+      "name": "Default Position Sizing Employee",
+      "avatar": "avatar_pos_sizing.png",
+      "description": "Recommends size metrics based on risk allocations.",
+      "state": "ACTIVE",
+      "employee_type": "Position Sizing Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 70.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249545+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-CPT",
+      "name": "Default Capital Protection Employee",
+      "avatar": "avatar_cap_protection.png",
+      "description": "Ensures trade execution pauses during major drawdowns.",
+      "state": "ACTIVE",
+      "employee_type": "Capital Protection Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249627+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-EXP",
+      "name": "Default Exposure Employee",
+      "avatar": "avatar_exposure_emp.png",
+      "description": "Monitors active exposures across symbols.",
+      "state": "ACTIVE",
+      "employee_type": "Exposure Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 80.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249710+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-NWS",
+      "name": "Default News Employee",
+      "avatar": "avatar_news_emp.png",
+      "description": "Monitors global headlines and news sentiments.",
+      "state": "ACTIVE",
+      "employee_type": "News Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 60.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249794+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m",
+          "1h",
+          "daily"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-CAL",
+      "name": "Default Economic Calendar Employee",
+      "avatar": "avatar_calendar.png",
+      "description": "Monitors upcoming central bank policies and events.",
+      "state": "ACTIVE",
+      "employee_type": "Economic Calendar Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 55.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249878+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-EVR",
+      "name": "Default Event Risk Employee",
+      "avatar": "avatar_event_risk.png",
+      "description": "Monitors high-volatility event risk.",
+      "state": "ACTIVE",
+      "employee_type": "Event Risk Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 60.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.249961+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-EXE",
+      "name": "Default Execution Employee",
+      "avatar": "avatar_exec_emp.png",
+      "description": "Monitors transaction execution speeds.",
+      "state": "ACTIVE",
+      "employee_type": "Execution Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.250053+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-PTF",
+      "name": "Default Portfolio Employee",
+      "avatar": "avatar_portfolio_emp.png",
+      "description": "Monitors net asset returns and win rates.",
+      "state": "ACTIVE",
+      "employee_type": "Portfolio Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 70.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.250141+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-PPR",
+      "name": "Default Paper Trading Employee",
+      "avatar": "avatar_paper_emp.png",
+      "description": "Monitors virtual margins and account balances.",
+      "state": "ACTIVE",
+      "employee_type": "Paper Trading Employee",
+      "capital_allocation": 0.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "WAIT",
+      "last_decision_confidence": 50.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.250222+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 0.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options"
+        ],
+        "allowed_products": [
+          "CNC",
+          "MIS",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 50.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-OPT",
+      "name": "Default Options Specialist",
+      "avatar": "avatar_options.png",
+      "description": "Specializes in Option trading strategies, margins, and hedging.",
+      "state": "ACTIVE",
+      "employee_type": "Options Specialist",
+      "capital_allocation": 200000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 70.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.251877+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 25000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Options"
+        ],
+        "allowed_products": [
+          "NRML",
+          "MIS"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 70.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-EQI",
+      "name": "Default Equity Intraday Specialist",
+      "avatar": "avatar_intraday.png",
+      "description": "Trades Equity Intraday positions utilizing margin multiplier leverage.",
+      "state": "ACTIVE",
+      "employee_type": "Equity Intraday Specialist",
+      "capital_allocation": 100000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 65.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.252008+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 15000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity"
+        ],
+        "allowed_products": [
+          "MIS"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m",
+          "15m"
+        ],
+        "confidence_threshold": 65.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-EQS",
+      "name": "Default Equity Swing Specialist",
+      "avatar": "avatar_swing.png",
+      "description": "Executes longer-duration swing signals on equity markets.",
+      "state": "ACTIVE",
+      "employee_type": "Equity Swing Specialist",
+      "capital_allocation": 150000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 60.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.252119+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 30000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity"
+        ],
+        "allowed_products": [
+          "CNC",
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1h",
+          "daily"
+        ],
+        "confidence_threshold": 60.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-COM",
+      "name": "Default Commodity Specialist",
+      "avatar": "avatar_commodity.png",
+      "description": "Focuses on Gold, Crude Oil, and Natural Gas futures.",
+      "state": "ACTIVE",
+      "employee_type": "Commodity Specialist",
+      "capital_allocation": 150000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 68.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.252209+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 20000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Commodity"
+        ],
+        "allowed_products": [
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "5m",
+          "15m",
+          "1h"
+        ],
+        "confidence_threshold": 68.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-CUR",
+      "name": "Default Currency Specialist",
+      "avatar": "avatar_currency.png",
+      "description": "Focuses on USDINR and EURINR currency derivatives.",
+      "state": "ACTIVE",
+      "employee_type": "Currency Specialist",
+      "capital_allocation": 80000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 62.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.252293+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 10000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Currency"
+        ],
+        "allowed_products": [
+          "NRML"
+        ],
+        "allowed_timeframes": [
+          "1m",
+          "5m"
+        ],
+        "confidence_threshold": 62.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    },
+    {
+      "employee_code": "EMP-PM",
+      "name": "Default Portfolio Manager",
+      "avatar": "avatar_pm.png",
+      "description": "Orchestrates allocation rules across multi-asset categories.",
+      "state": "ACTIVE",
+      "employee_type": "Portfolio Manager",
+      "capital_allocation": 500000.0,
+      "pnl": 0.0,
+      "win_rate": 0.0,
+      "trade_count": 0,
+      "is_active": true,
+      "health_status": "HEALTHY",
+      "last_decision": "BUY",
+      "last_decision_confidence": 70.0,
+      "total_signals": 0,
+      "correct_signals": 0,
+      "incorrect_signals": 0,
+      "accuracy_pct": 100.0,
+      "last_execution_time_ms": 0.0,
+      "avg_execution_time_ms": 0.0,
+      "error_count": 0,
+      "last_error": null,
+      "heartbeat_timestamp": "2026-07-05T16:06:23.252375+00:00",
+      "accuracy_history": [],
+      "risk_stats": {
+        "consecutive_wins": 0,
+        "consecutive_losses": 0,
+        "max_exposure": 100000.0,
+        "max_daily_loss": 200.0
+      },
+      "strategy_performance": {},
+      "config": {
+        "allowed_segments": [
+          "Equity",
+          "Options",
+          "Commodity"
+        ],
+        "allowed_products": [
+          "CNC",
+          "NRML",
+          "MIS"
+        ],
+        "allowed_timeframes": [
+          "daily"
+        ],
+        "confidence_threshold": 60.0,
+        "enable_news_filter": true,
+        "enable_regime_filter": true
+      }
+    }
+  ]
+}

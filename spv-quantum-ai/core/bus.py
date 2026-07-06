@@ -10,6 +10,7 @@ logger = get_logger("event_bus")
 class EventModel(BaseModel):
     """Pydantic model representing standard SPV Quantum AI Event."""
     event_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    trace_id: Optional[str] = Field(default=None, description="Propagated trace ID linking related events across the pipeline")
     event_type: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     source_agent: str
@@ -37,6 +38,8 @@ class EventBus:
         self._is_running: bool = False
         self._ref_count: int = 0
         self._current_loop: Any = None
+        # Track in-flight dispatch tasks to prevent leaks on shutdown
+        self._inflight_tasks: set = set()
 
     def start(self) -> None:
         """Starts the background queue processing worker loop."""
@@ -73,6 +76,10 @@ class EventBus:
             except asyncio.CancelledError:
                 pass
             self._worker_task = None
+        # Await any in-flight dispatch tasks so callbacks are not orphaned
+        if self._inflight_tasks:
+            await asyncio.gather(*self._inflight_tasks, return_exceptions=True)
+            self._inflight_tasks.clear()
         logger.info("EventBus priority queue worker loop stopped.")
 
     async def subscribe(self, event_type: str, callback: EventCallback) -> None:
@@ -158,9 +165,11 @@ class EventBus:
             targets = list(self._subscribers.get(event.event_type, []))
             globals_copy = list(self._global_subscribers)
 
-        # Distribute concurrently
+        # Distribute concurrently, tracking tasks to prevent leaks
         for callback in (targets + globals_copy):
-            asyncio.create_task(self._safe_invoke(callback, event))
+            task = asyncio.create_task(self._safe_invoke(callback, event))
+            self._inflight_tasks.add(task)
+            task.add_done_callback(self._inflight_tasks.discard)
 
     async def _safe_invoke(self, callback: EventCallback, event: EventModel) -> None:
         """Traps subscriber callback failures to preserve queue processing integrity."""

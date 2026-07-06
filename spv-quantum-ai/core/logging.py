@@ -1,4 +1,5 @@
 import logging
+import logging.handlers
 import json
 import sys
 from datetime import datetime, timezone
@@ -69,7 +70,13 @@ def setup_logging() -> None:
     logs_dir = root_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
     
-    file_handler = logging.FileHandler(logs_dir / "system.log", encoding="utf-8")
+    # Rotating File Handler for production persistence (10 MB max, 5 backups)
+    file_handler = logging.handlers.RotatingFileHandler(
+        logs_dir / "system.log",
+        maxBytes=10 * 1024 * 1024,   # 10 MB per file
+        backupCount=5,               # keep 5 rotated files → max 50 MB total
+        encoding="utf-8",
+    )
     file_handler.setFormatter(JSONFormatter())
     file_handler.setLevel(logging.DEBUG)  # Keep verbose logs in file
     root_logger.addHandler(file_handler)

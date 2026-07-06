@@ -51,6 +51,17 @@ class Settings(BaseSettings):
             except Exception as e:
                 print(f"Warning: Failed to load settings.yaml: {e}")
 
+    def save_yaml_config(self) -> None:
+        """Saves current yaml_config back to config/settings.yaml file."""
+        root_dir = Path(__file__).resolve().parent.parent
+        yaml_path = root_dir / "config" / "settings.yaml"
+        try:
+            with open(yaml_path, "w") as f:
+                yaml.safe_dump(self.yaml_config, f, default_flow_style=False)
+        except Exception as e:
+            print(f"Warning: Failed to save settings.yaml: {e}")
+            raise e
+
     def get_database_url(self) -> str:
         """Determines the appropriate database URL based on environment context."""
         # Check if running inside docker (DOCKER_CONTAINER env set in Dockerfile/compose)

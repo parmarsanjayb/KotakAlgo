@@ -1,5 +1,6 @@
 import asyncio
 import time
+import hashlib
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
@@ -12,6 +13,7 @@ from execution.validator import OrderValidator
 from execution.tracker import OrderTracker
 from execution.publisher import ExecutionPublisher
 from core.logging import get_logger
+from core.exceptions import DuplicateOrderError
 
 logger = get_logger("execution_engine")
 
@@ -30,6 +32,10 @@ class ExecutionEngine:
         self.max_retries = max_retries
         self.retry_delay_sec = retry_delay_sec
         self._running = False
+        
+        # Duplicate order prevention: hash → timestamp of last submission
+        self._order_dedup: Dict[str, float] = {}
+        self._dedup_window_sec: float = 5.0  # Reject identical order within 5 seconds
         
         # Link queue processing callback
         self.queue.set_callback(self._process_queued_order)
@@ -57,6 +63,7 @@ class ExecutionEngine:
     async def submit_order_request(self, order_data: Dict[str, Any]) -> ExecutionOrder:
         """
         Receives order data, creates an ExecutionOrder, validates it, and enqueues it.
+        Rejects duplicate orders submitted within the dedup window.
         """
         # Parse Pydantic ExecutionOrder model
         symbol = order_data.get("symbol", "UNKNOWN")
@@ -64,6 +71,34 @@ class ExecutionEngine:
         quantity = float(order_data.get("quantity", 0.0))
         price = float(order_data["price"]) if order_data.get("price") is not None else None
         stop_price = float(order_data["stop_price"]) if order_data.get("stop_price") is not None else None
+        
+        # ── Duplicate Order Prevention ────────────────────────────────────────
+        dedup_key = hashlib.md5(
+            f"{symbol}:{side}:{quantity}:{price}".encode()
+        ).hexdigest()
+        now = time.monotonic()
+        last_ts = self._order_dedup.get(dedup_key, 0.0)
+        if now - last_ts < self._dedup_window_sec:
+            logger.warning(
+                "Duplicate order rejected",
+                symbol=symbol, side=side, quantity=quantity,
+                dedup_key=dedup_key, window_sec=self._dedup_window_sec
+            )
+            # Build a FAILED ExecutionOrder to return a consistent type
+            dup_order = ExecutionOrder(
+                symbol=symbol, side=side, order_type="MARKET",
+                quantity=quantity, price=price,
+            )
+            dup_order.status = OrderLifecycleStatus.FAILED
+            dup_order.rejection_reason = "Duplicate order: identical order submitted within dedup window"
+            return dup_order
+        self._order_dedup[dedup_key] = now
+        # Evict expired entries to prevent memory growth
+        self._order_dedup = {
+            k: v for k, v in self._order_dedup.items()
+            if now - v < self._dedup_window_sec * 2
+        }
+        # ─────────────────────────────────────────────────────────────────────
         
         raw_product = order_data.get("product_type", "MIS").upper()
         product_type = OrderProductType(raw_product) if raw_product in ("MIS", "CNC", "NRML") else OrderProductType.MIS

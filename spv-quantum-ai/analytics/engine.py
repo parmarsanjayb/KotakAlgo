@@ -220,5 +220,14 @@ class PerformanceAnalyticsEngine:
 
         return report
 
+    async def get_dashboard_summary(self) -> Dict[str, Any]:
+        await self.recalculate_metrics()
+        return self.metrics.model_dump()
+
+    async def get_full_report(self) -> Dict[str, Any]:
+        report = await self.generate_report("Dashboard")
+        return report.model_dump()
+
+
 # Singleton
 performance_analytics_engine = PerformanceAnalyticsEngine()

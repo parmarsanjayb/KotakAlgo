@@ -1,58 +1,58 @@
-system:
-  name: "SPV Quantum AI"
-  version: "1.0.0"
-
 agents:
-  market_agent:
+  chief_decision_agent:
     enabled: true
-    tick_interval_ms: 1000
-  risk_agent:
-    enabled: true
-    check_interval_ms: 5000
   execution_agent:
     enabled: true
     retry_attempts: 3
     retry_delay_sec: 1
-  telegram_notifier:
+  market_agent:
     enabled: true
+    tick_interval_ms: 1000
   market_intelligence_agent:
     enabled: true
-  chief_decision_agent:
+  risk_agent:
+    check_interval_ms: 5000
     enabled: true
-
+  telegram_notifier:
+    enabled: true
 brokers:
   active: paper_broker
+  kotak_neo:
+    api_key: test_api_key_123
+    client_id: '9999999999'
+    enabled: false
   paper_broker:
+    commission_rate: 0.0003
     enabled: true
     initial_balance: 1000000.0
-    commission_rate: 0.0003
-    rejection_rate: 0.02
-    partial_fill_rate: 0.05
     margin_multiplier: 5.0
-  kotak_neo:
-    enabled: false
-    client_id: ""
-    api_key: ""
-
+    partial_fill_rate: 0.05
+    rejection_rate: 0.02
+decision_scoring:
+  bonus_aligned_signals: 5.0
+  min_confidence_threshold: 60.0
+  penalty_conflicting_signals: 15.0
+  weights:
+    market_analysis: 0.3
+    market_regime: 0.2
+    risk_status: 0.25
+    strategy_match: 0.25
+market_feed:
+  active: mock
+  binance:
+    url: wss://stream.binance.com:9443/ws
+  kotak:
+    url: wss://neo-api.kotaksecurities.com/apim/neotrade/1.0
 risk_limits:
-  max_drawdown_percent: 5.0
-  max_position_size_usd: 10000.0
-  max_open_orders: 10
-  daily_loss_limit_usd: 500.0
   cooldown_period_minutes: 30
-
+  daily_loss_limit_usd: 600.0
+  max_drawdown_percent: 5.0
+  max_open_orders: 10
+  max_position_size_usd: 12000.0
+system:
+  name: SPV Quantum AI
+  version: 1.0.0
 telegram:
   send_alerts: true
-  send_trades: true
   send_performance_daily: true
-
-decision_scoring:
-  weights:
-    market_analysis: 0.30
-    market_regime: 0.20
-    strategy_match: 0.25
-    risk_status: 0.25
-  min_confidence_threshold: 60.0
-  bonus_aligned_signals: 5.0
-  penalty_conflicting_signals: 15.0
-
+  send_trades: true

@@ -42,9 +42,10 @@ class ServiceMonitor:
         """Checks the connection status to the database."""
         t0 = time.perf_counter()
         try:
-            from database.session import db_session
-            # Simulate basic connection validation
-            # (or select 1 check if session is active)
+            from database.connection import async_session
+            from sqlalchemy import text
+            async with async_session() as session:
+                await session.execute(text("SELECT 1"))
             latency = (time.perf_counter() - t0) * 1000.0
             return True, latency
         except Exception:
