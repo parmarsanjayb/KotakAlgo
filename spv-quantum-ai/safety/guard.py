@@ -107,7 +107,10 @@ class TradingGuard:
         positions = await portfolio_engine.positions.get_all_positions()
         pos = next((p for p in positions if p.symbol == symbol), None)
         if pos and pos.quantity != 0:
-            return False, f"Duplicate symbol protection: active position in {symbol} already exists."
+            pos_side = str(pos.side).upper()
+            order_side = str(order_data.get("side", "BUY")).upper()
+            if pos_side == order_side:
+                return False, f"Duplicate symbol protection: active position in {symbol} already exists."
         return True, ""
 
     async def check_daily_limits(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
@@ -139,16 +142,30 @@ class TradingGuard:
         # 1. Max open positions
         max_pos = int(self.config.get("max_open_positions_guard", 5))
         active_positions = [p for p in await portfolio_engine.positions.get_all_positions() if p.quantity != 0]
-        if len(active_positions) >= max_pos:
-            return False, f"Exposure guard: max open positions count limit {max_pos} reached."
 
-        # 2. Max exposure value
         symbol = order_data.get("symbol")
         qty = float(order_data.get("quantity", 0))
         price = float(order_data.get("price") or 100.0)
-        order_exposure = qty * price
+        order_side = str(order_data.get("side", "BUY")).upper()
 
-        total_exposure = sum(abs(p.quantity * p.average_price) for p in active_positions)
+        pos = next((p for p in active_positions if p.symbol == symbol), None)
+
+        if not pos:
+            if len(active_positions) >= max_pos:
+                return False, f"Exposure guard: max open positions count limit {max_pos} reached."
+            order_exposure = qty * price
+        else:
+            pos_side = str(pos.side).upper()
+            if pos_side == order_side:
+                order_exposure = qty * price
+            else:
+                if qty >= pos.quantity:
+                    remaining = qty - pos.quantity
+                    order_exposure = (remaining * price) - (pos.quantity * pos.avg_price)
+                else:
+                    order_exposure = - (qty * pos.avg_price)
+
+        total_exposure = sum(abs(p.quantity * p.avg_price) for p in active_positions)
         max_exposure = float(self.config.get("max_exposure_usd", 50000.0))
         if total_exposure + order_exposure > max_exposure:
             return False, f"Exposure guard: order would push total exposure (${total_exposure + order_exposure:.2f}) beyond limit (${max_exposure:.2f})."

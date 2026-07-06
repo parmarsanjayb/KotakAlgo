@@ -73,7 +73,7 @@ class SafetyEngine:
             pos = next((p for p in positions if p.symbol == symbol), None)
             if pos and pos.quantity != 0:
                 pos_side = "BUY" if pos.quantity > 0 else "SELL"
-                self.manager.protection.register_position(symbol, pos_side, pos.quantity, pos.average_price)
+                self.manager.protection.register_position(symbol, pos_side, pos.quantity, pos.avg_price)
             else:
                 self.manager.protection.register_position(symbol, side, 0, avg_price)
         except Exception as e:

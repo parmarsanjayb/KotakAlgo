@@ -1,6 +1,7 @@
 import time
 import uuid
 import random
+import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -157,6 +158,14 @@ class PaperBroker(BaseBroker):
             broker=self.name,
         )
 
+        from paper.engine import paper_trading_engine
+
+        # ── Simulating configured execution queue latency ──
+        if paper_trading_engine.state.is_running:
+            delay_ms = paper_trading_engine.config.latency_ms
+            if delay_ms > 0:
+                await asyncio.sleep(delay_ms / 1000.0)
+
         # ── Simulate rejection ──
         if random.random() < self._rejection_rate:
             order.status = OrderStatus.REJECTED
@@ -170,7 +179,21 @@ class PaperBroker(BaseBroker):
             )
 
         # ── Execution price ──
-        exec_price = price if price else round(random.uniform(100, 5000), 2)
+        if price:
+            exec_price = price
+        else:
+            exec_price = round(random.uniform(100, 5000), 2)
+
+        # ── Simulate configured slippage and spread ──
+        if paper_trading_engine.state.is_running:
+            cfg = paper_trading_engine.config
+            slippage = exec_price * cfg.slippage_pct
+            spread = exec_price * cfg.spread_pct
+            if side == OrderSide.BUY:
+                exec_price = exec_price + slippage + (spread / 2.0)
+            else:
+                exec_price = exec_price - slippage - (spread / 2.0)
+            exec_price = round(exec_price, 2)
 
         # ── Simulate partial fill (5 % chance) ──
         if random.random() < self._partial_fill_rate:
@@ -185,32 +208,59 @@ class PaperBroker(BaseBroker):
         order.avg_price = exec_price
         order.updated_at = datetime.now(timezone.utc)
 
-        # ── Update cash balance ──
-        cost       = exec_price * filled_qty
+        cost = exec_price * filled_qty
         commission = round(cost * self._commission_rate, 4)
         margin_req = round(cost / self._margin_multiplier, 4)
 
-        if side == OrderSide.BUY:
-            self._balance     -= (commission)
+        # ── Net Position & PNL Netting ──
+        pos = self._positions.get(symbol)
+        realized_pnl = 0.0
+
+        if not pos:
+            # Create new Position
+            self._positions[symbol] = Position(
+                symbol=symbol,
+                side=side,
+                quantity=filled_qty,
+                avg_price=exec_price,
+                broker=self.name
+            )
             self._used_margin += margin_req
         else:
-            self._balance     += (cost - commission)
-            self._used_margin  = max(0.0, self._used_margin - margin_req)
+            # Net position logic
+            if pos.side == side:
+                # Adding to same side
+                total_qty = pos.quantity + filled_qty
+                pos.avg_price = round(
+                    (pos.avg_price * pos.quantity + exec_price * filled_qty) / total_qty, 4
+                )
+                pos.quantity = total_qty
+                self._used_margin += margin_req
+            else:
+                # Opposite side (close or partial close)
+                if filled_qty < pos.quantity:
+                    pnl = (exec_price - pos.avg_price) * filled_qty if pos.side == OrderSide.BUY else (pos.avg_price - exec_price) * filled_qty
+                    realized_pnl += pnl
+                    pos.quantity = round(pos.quantity - filled_qty, 4)
+                    self._used_margin = max(0.0, round(self._used_margin - margin_req, 4))
+                elif filled_qty == pos.quantity:
+                    pnl = (exec_price - pos.avg_price) * filled_qty if pos.side == OrderSide.BUY else (pos.avg_price - exec_price) * filled_qty
+                    realized_pnl += pnl
+                    self._positions.pop(symbol, None)
+                    self._used_margin = max(0.0, round(self._used_margin - margin_req, 4))
+                else:
+                    # Reversal
+                    pnl = (exec_price - pos.avg_price) * pos.quantity if pos.side == OrderSide.BUY else (pos.avg_price - exec_price) * pos.quantity
+                    realized_pnl += pnl
+                    
+                    remaining_qty = round(filled_qty - pos.quantity, 4)
+                    pos.side = side
+                    pos.quantity = remaining_qty
+                    pos.avg_price = exec_price
+                    self._used_margin = round((remaining_qty * exec_price) / self._margin_multiplier, 4)
 
-        # ── Update position ──
-        pos_key = f"{symbol}_{side.value}"
-        if pos_key in self._positions:
-            existing = self._positions[pos_key]
-            total_qty   = existing.quantity + filled_qty
-            existing.avg_price = round(
-                (existing.avg_price * existing.quantity + exec_price * filled_qty) / total_qty, 4
-            )
-            existing.quantity = total_qty
-        else:
-            self._positions[pos_key] = Position(
-                symbol=symbol, side=side,
-                quantity=filled_qty, avg_price=exec_price, broker=self.name
-            )
+        # ── Update virtual cash balance ──
+        self._balance += (realized_pnl - commission)
 
         # ── Record trade ──
         trade = Trade(
