@@ -40,7 +40,7 @@ class WebSocketStreamManager:
         self._feed_mode = feed_config.get("active", "mock").lower()
 
         # Mock price seed
-        self._prices = {"BTCUSD": 65000.0, "ETHUSD": 3500.0, "NIFTY50": 24200.0, "BANKNIFTY": 52000.0}
+        self._prices = {"BTCUSD": 65000.0, "ETHUSD": 3500.0, "NIFTY50": 24200.0, "BANKNIFTY": 58294.80}
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
 

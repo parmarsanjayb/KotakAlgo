@@ -91,9 +91,9 @@ class DecisionPublisher:
             source_agent="chief_decision_agent",
             payload=payload
         ))
-        # Route to Execution Agent via live event loop
+        # Route to Risk Agent via live event loop
         await event_bus.publish(EventModel(
-            event_type="order_approved",
+            event_type="order_request",
             source_agent="chief_decision_agent",
             payload={
                 "symbol": payload["symbol"],
@@ -145,7 +145,7 @@ class ChiefDecisionAgent(BaseAgent):
 
     @property
     def output_event_types(self) -> List[str]:
-        return ["trade_approved", "trade_rejected", "trade_blocked", "order_approved"]
+        return ["trade_approved", "trade_rejected", "trade_blocked", "order_request"]
 
     async def initialize(self) -> None:
         self.log_info("ChiefDecisionAgent initialized.")
@@ -157,6 +157,7 @@ class ChiefDecisionAgent(BaseAgent):
         if event.event_type != "decision_score":
             return None
 
+        start_time = time.perf_counter()
         score_data = event.payload.get("decision_score", event.payload)
         symbol = score_data.get("symbol", "UNKNOWN")
         confidence = float(score_data.get("overall_confidence", 0.0))
@@ -179,6 +180,14 @@ class ChiefDecisionAgent(BaseAgent):
                 code = "CONFIDENCE_OR_RISK_FAILURE"
                 explanation = f"Confidence {confidence}% or risk status {risk_status} rejected."
 
+            # Resolve actual price and quantity dynamically
+            from market.manager import market_data_manager
+            tick = await market_data_manager.cache.get_tick(symbol)
+            price = tick.ltp if tick else score_data.get("price", 100.0)
+            qty = score_data.get("quantity")
+            if not qty:
+                qty = 0.1 if price > 1000.0 else 10.0
+
             # Build record payload
             record = {
                 "decision_id": f"DEC-{uuid.uuid4().hex[:8]}",
@@ -190,8 +199,8 @@ class ChiefDecisionAgent(BaseAgent):
                 "explanation": explanation,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "side": score_data.get("side", "BUY"),
-                "quantity": score_data.get("quantity", 10.0),
-                "price": score_data.get("price", 100.0)
+                "quantity": qty,
+                "price": price
             }
 
             # 3. Publish and Queue
@@ -208,9 +217,12 @@ class ChiefDecisionAgent(BaseAgent):
 
             self.log_info(f"Chief Decision: {state} for symbol {symbol} | Reason: {explanation}")
             
+            processing_time = (time.perf_counter() - start_time) * 1000.0
             return AgentResultModel(
-                agent_name=self.name,
+                agent_name=self.agent_name,
                 signal=state,
                 confidence=confidence,
+                reason=explanation,
+                processing_time=processing_time,
                 metadata=record
             )

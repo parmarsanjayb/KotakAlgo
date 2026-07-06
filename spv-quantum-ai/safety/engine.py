@@ -57,10 +57,11 @@ class SafetyEngine:
     async def _handle_order_filled(self, event: EventModel) -> None:
         try:
             payload = event.payload
-            symbol = payload.get("symbol")
-            side = payload.get("side", "BUY")
-            qty = float(payload.get("filled_quantity", payload.get("quantity", 0.0)))
-            avg_price = float(payload.get("avg_price", payload.get("price", 0.0)))
+            order_data = payload.get("order", payload)
+            symbol = order_data.get("symbol")
+            side = order_data.get("side", "BUY")
+            qty = float(order_data.get("filled_quantity", order_data.get("quantity", 0.0)))
+            avg_price = float(order_data.get("avg_fill_price", order_data.get("price", 0.0)))
             pnl = float(payload.get("pnl", 0.0))
 
             # Record execution in trading guard

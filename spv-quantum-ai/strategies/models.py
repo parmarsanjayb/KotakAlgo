@@ -38,11 +38,15 @@ class StrategyResponse(BaseModel):
 class StrategyMatchedEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    symbol: str
+    timeframe: str
     strategy_response: StrategyResponse
     context: Dict[str, Any] = Field(default_factory=dict)
 
 class StrategyRejectedEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    symbol: str
+    timeframe: str
     strategy_response: StrategyResponse
     context: Dict[str, Any] = Field(default_factory=dict)

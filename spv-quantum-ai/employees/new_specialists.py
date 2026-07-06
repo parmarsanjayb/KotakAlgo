@@ -179,22 +179,22 @@ class MarketRegimeEmployee(BaseNewSpecialist):
 
     async def start(self) -> None:
         await super().start()
-        await event_bus.subscribe("regime_changed", self._on_regime)
+        await event_bus.subscribe("market_regime", self._on_regime)
 
     async def stop(self) -> None:
         await super().stop()
-        await event_bus.unsubscribe("regime_changed", self._on_regime)
+        await event_bus.unsubscribe("market_regime", self._on_regime)
 
     async def _on_regime(self, event: EventModel) -> None:
         try:
             payload = event.payload
-            regime = payload.get("regime", "Sideways")
+            regime = payload.get("market_regime", "Sideways")
             confidence = payload.get("confidence", 50.0)
             symbol = payload.get("symbol", "NIFTY50")
             
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": regime,
+                    "recommendation": str(regime),
                     "confidence": confidence,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
@@ -563,11 +563,11 @@ class CapitalProtectionEmployee(BaseNewSpecialist):
 
     async def start(self) -> None:
         await super().start()
-        await event_bus.subscribe("pnl_update", self._on_pnl)
+        await event_bus.subscribe("pnl_updated", self._on_pnl)
 
     async def stop(self) -> None:
         await super().stop()
-        await event_bus.unsubscribe("pnl_update", self._on_pnl)
+        await event_bus.unsubscribe("pnl_updated", self._on_pnl)
 
     async def _on_pnl(self, event: EventModel) -> None:
         try:
@@ -718,7 +718,8 @@ class ExecutionEmployee(BaseNewSpecialist):
     async def _on_order(self, event: EventModel) -> None:
         try:
             payload = event.payload
-            symbol = payload.get("symbol", "NIFTY50")
+            order_data = payload.get("order", payload)
+            symbol = order_data.get("symbol", "NIFTY50")
             async with self._lock:
                 self.latest_results[symbol] = {
                     "recommendation": "BUY",
@@ -761,25 +762,35 @@ class PaperTradingEmployee(BaseNewSpecialist):
 
     async def start(self) -> None:
         await super().start()
-        await event_bus.subscribe("paper_status_changed", self._on_paper_status)
+        await event_bus.subscribe("paper_trade_started", self._on_paper_started)
+        await event_bus.subscribe("paper_trade_stopped", self._on_paper_stopped)
 
     async def stop(self) -> None:
         await super().stop()
-        await event_bus.unsubscribe("paper_status_changed", self._on_paper_status)
+        await event_bus.unsubscribe("paper_trade_started", self._on_paper_started)
+        await event_bus.unsubscribe("paper_trade_stopped", self._on_paper_stopped)
 
-    async def _on_paper_status(self, event: EventModel) -> None:
+    async def _on_paper_started(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = "SYSTEM"
-            rec = "BUY" if payload.get("is_active", False) else "WAIT"
             async with self._lock:
-                self.latest_results[symbol] = {
-                    "recommendation": rec,
+                self.latest_results["SYSTEM"] = {
+                    "recommendation": "BUY",
                     "confidence": 80.0,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
-            logger.error("Error in PaperTradingEmployee _on_paper_status", error=str(e))
+            logger.error("Error in PaperTradingEmployee _on_paper_started", error=str(e))
+
+    async def _on_paper_stopped(self, event: EventModel) -> None:
+        try:
+            async with self._lock:
+                self.latest_results["SYSTEM"] = {
+                    "recommendation": "WAIT",
+                    "confidence": 80.0,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
+        except Exception as e:
+            logger.error("Error in PaperTradingEmployee _on_paper_stopped", error=str(e))
 
 
 # ── Extra Predefined Specialists ─────────────────────────────────────────────

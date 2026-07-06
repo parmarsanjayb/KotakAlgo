@@ -77,7 +77,8 @@ class DecisionScoringEngine:
         risk_status = "BLOCK"
         try:
             risk_metrics = await risk_engine.get_dashboard_metrics()
-            risk_status = risk_metrics.get("risk_status", "BLOCK")
+            raw_status = risk_metrics.get("risk_status", "RESTRICTED")
+            risk_status = "ALLOW" if raw_status == "OPERATIONAL" else "BLOCK"
         except Exception:
             pass
 
@@ -85,7 +86,7 @@ class DecisionScoringEngine:
         strategy_matched = False
         strategy_action = "SIGNAL_NONE"
         try:
-            strategy_responses = await strategy_engine.evaluate_all(symbol, timeframe)
+            strategy_responses = await strategy_engine.evaluate_all(symbol, timeframe, publish_events=False)
             for r in strategy_responses:
                 if r.matched:
                     strategy_matched = True
@@ -124,6 +125,7 @@ class DecisionScoringEngine:
             overall_confidence=conf_score,
             component_scores=comp_scores,
             decision_quality=quality,
+            risk_status=risk_status,
             missing_requirements=missing_reqs,
             conflicting_signals=conflicts,
             reasoning_summary=reasoning,

@@ -20,7 +20,7 @@ class MarketAnalystAgent(BaseAgent):
 
     @property
     def input_event_types(self) -> List[str]:
-        return ["candle"]
+        return ["candle", "strategy_matched"]
 
     @property
     def output_event_types(self) -> List[str]:
@@ -33,21 +33,30 @@ class MarketAnalystAgent(BaseAgent):
         self.log_info("MarketAnalystAgent shutdown complete.")
 
     async def analyze(self, event: EventModel) -> Optional[AgentResultModel]:
-        if event.event_type != "candle":
+        if event.event_type not in ("candle", "strategy_matched"):
             return None
             
         try:
             payload = event.payload
-            raw_candle = payload.get("candle", payload)
-            candle = Candle(**raw_candle)
             
-            if not candle.complete:
-                return None
+            if event.event_type == "strategy_matched":
+                symbol = payload.get("symbol", "UNKNOWN")
+                tf_str = payload.get("timeframe", "M1")
+                timeframe = Timeframe(tf_str)
+                strat_resp = payload.get("strategy_response")
+            else:
+                raw_candle = payload.get("candle", payload)
+                candle = Candle(**raw_candle)
+                if not candle.complete:
+                    return None
+                symbol = candle.symbol
+                timeframe = candle.timeframe
+                strat_resp = None
                 
-            self.log_info(f"Triggering market analysis for {candle.symbol} ({candle.timeframe.value})")
+            self.log_info(f"Triggering market analysis for {symbol} ({timeframe.value}) via event {event.event_type}")
             
             start_time = time.perf_counter()
-            report = await market_analysis_engine.analyze_market(candle.symbol, candle.timeframe)
+            report = await market_analysis_engine.analyze_market(symbol, timeframe, strat_resp)
             processing_time = (time.perf_counter() - start_time) * 1000.0
             
             # Save results into agent's decisions structure

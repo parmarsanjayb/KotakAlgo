@@ -39,12 +39,25 @@ class StrategyEngine:
             return
         self._running = True
         await event_bus.subscribe("candle", self._on_candle_event)
-        logger.info("StrategyEngine started and subscribed to candle events.")
+        await event_bus.subscribe("scanner_match", self._on_scanner_match)
+        logger.info("StrategyEngine started and subscribed to candle and scanner_match events.")
 
     async def stop(self) -> None:
         self._running = False
         await event_bus.unsubscribe("candle", self._on_candle_event)
+        await event_bus.unsubscribe("scanner_match", self._on_scanner_match)
         logger.info("StrategyEngine stopped.")
+
+    async def _on_scanner_match(self, event: EventModel) -> None:
+        try:
+            payload = event.payload
+            scan_result = payload.get("scan_result", payload)
+            symbol = scan_result.get("symbol")
+            if not symbol:
+                return
+            await self.evaluate_all(symbol, Timeframe.M1)
+        except Exception as e:
+            logger.error("Error processing scanner_match event in StrategyEngine", error=str(e))
 
     async def _on_candle_event(self, event: EventModel) -> None:
         try:
@@ -56,7 +69,7 @@ class StrategyEngine:
         except Exception as e:
             logger.error("Error processing candle event in StrategyEngine", error=str(e))
 
-    async def evaluate_all(self, symbol: str, timeframe: Timeframe) -> List[StrategyResponse]:
+    async def evaluate_all(self, symbol: str, timeframe: Timeframe, publish_events: bool = True) -> List[StrategyResponse]:
         """
         Builds the context for symbol/timeframe and evaluates all active strategies.
         """
@@ -84,15 +97,18 @@ class StrategyEngine:
                     responses.append(resp)
                     
                     # Publish Matched event
-                    evt = StrategyMatchedEvent(
-                        strategy_response=resp,
-                        context=context.get("current", {})
-                    )
-                    await event_bus.publish(EventModel(
-                        event_type="strategy_matched",
-                        source_agent="strategy_engine",
-                        payload=evt.model_dump()
-                    ))
+                    if publish_events:
+                        evt = StrategyMatchedEvent(
+                            symbol=symbol,
+                            timeframe=timeframe.value if hasattr(timeframe, "value") else str(timeframe),
+                            strategy_response=resp,
+                            context=context.get("current", {})
+                        )
+                        await event_bus.publish(EventModel(
+                            event_type="strategy_matched",
+                            source_agent="strategy_engine",
+                            payload=evt.model_dump()
+                        ))
                 else:
                     resp = StrategyResponse(
                         strategy_name=strategy.name,
@@ -106,15 +122,18 @@ class StrategyEngine:
                     responses.append(resp)
                     
                     # Publish Rejected event
-                    evt = StrategyRejectedEvent(
-                        strategy_response=resp,
-                        context=context.get("current", {})
-                    )
-                    await event_bus.publish(EventModel(
-                        event_type="strategy_rejected",
-                        source_agent="strategy_engine",
-                        payload=evt.model_dump()
-                    ))
+                    if publish_events:
+                        evt = StrategyRejectedEvent(
+                            symbol=symbol,
+                            timeframe=timeframe.value if hasattr(timeframe, "value") else str(timeframe),
+                            strategy_response=resp,
+                            context=context.get("current", {})
+                        )
+                        await event_bus.publish(EventModel(
+                            event_type="strategy_rejected",
+                            source_agent="strategy_engine",
+                            payload=evt.model_dump()
+                        ))
             except Exception as e:
                 logger.error(f"Failed to evaluate strategy {strategy.name}", error=str(e))
 

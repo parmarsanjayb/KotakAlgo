@@ -22,7 +22,9 @@ class MarketAnalysisEngine:
         self.cache = AnalysisCache()
         self.publisher = AnalysisPublisher(self.cache)
 
-    async def analyze_market(self, symbol: str, timeframe: Timeframe) -> MarketAnalysisReport:
+    async def analyze_market(
+        self, symbol: str, timeframe: Timeframe, strategy_response: Optional[dict] = None
+    ) -> MarketAnalysisReport:
         # 1. Fetch Indicators
         rsi = 50.0
         adx = 0.0
@@ -63,16 +65,21 @@ class MarketAnalysisEngine:
         matched_conf = 50.0
         matched_reason = "No active strategy rules matched."
         
-        try:
-            strategy_responses = await strategy_engine.evaluate_all(symbol, timeframe)
-            for resp in strategy_responses:
-                if resp.matched:
-                    rec_strategy = resp.strategy_name
-                    matched_conf = resp.confidence
-                    matched_reason = resp.reason
-                    break
-        except Exception:
-            pass
+        if strategy_response:
+            rec_strategy = strategy_response.get("strategy_name", "Wait & Watch")
+            matched_conf = float(strategy_response.get("confidence", 50.0))
+            matched_reason = strategy_response.get("reason", "Strategy match provided.")
+        else:
+            try:
+                strategy_responses = await strategy_engine.evaluate_all(symbol, timeframe, publish_events=False)
+                for resp in strategy_responses:
+                    if resp.matched:
+                        rec_strategy = resp.strategy_name
+                        matched_conf = resp.confidence
+                        matched_reason = resp.reason
+                        break
+            except Exception:
+                pass
 
         # 4. Formulate Bias
         bias = "NEUTRAL"
