@@ -699,3 +699,13 @@ button:active { transform: scale(0.97); }
         grid-template-columns: 1fr;
     }
 }
+
+.price-card {
+    cursor: pointer;
+}
+
+.price-card.active-symbol {
+    border-color: var(--accent-blue) !important;
+    background: rgba(0, 242, 254, 0.08) !important;
+    box-shadow: 0 0 15px rgba(0, 242, 254, 0.15) !important;
+}

@@ -26,6 +26,7 @@
             <button class="tab-btn" id="btn-tab-decisions" onclick="switchTab('tab-decisions')">Decision Log</button>
             <button class="tab-btn" id="btn-tab-performance" onclick="switchTab('tab-performance')">Performance &amp; Charts</button>
             <button class="tab-btn" id="btn-tab-settings" onclick="switchTab('tab-settings')">System Settings</button>
+            <button class="tab-btn" id="btn-tab-paper" onclick="switchTab('tab-paper')">Paper Trading</button>
         </nav>
         
         <div class="top-bar-metrics">
@@ -482,6 +483,100 @@
                     </div>
                     
                 </form>
+            </div>
+        </div>
+
+        <!-- TAB 6: PAPER TRADING -->
+        <div id="tab-paper" class="tab-panel">
+            <div class="terminal-layout-grid" style="grid-template-columns: 1fr 2fr; margin-top: 1rem;">
+                
+                <!-- COLUMN 1: Session Controls -->
+                <div class="grid-col flex-col">
+                    <div class="card">
+                        <h2>Session Configuration</h2>
+                        <div class="details-grid-risk" style="margin-bottom: 1.5rem;">
+                            <div><strong>Session ID:</strong> <span id="paper-sess-id">-</span></div>
+                            <div><strong>Session Status:</strong> <span class="badge" id="paper-sess-status">STOPPED</span></div>
+                        </div>
+                        
+                        <form id="paper-start-form" onsubmit="startPaperSession(event)" style="display: flex; flex-direction: column; gap: 1rem;">
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Starting Capital (INR ₹)</label>
+                                <input type="number" id="paper-init-capital" value="1000000" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
+                            </div>
+                            
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Simulated Latency (ms)</label>
+                                <input type="number" id="paper-latency" value="50" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
+                            </div>
+                            
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Simulated Slippage (%)</label>
+                                <input type="number" step="0.0001" id="paper-slippage" value="0.05" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
+                            </div>
+                            
+                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
+                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Simulated Spread (%)</label>
+                                <input type="number" step="0.0001" id="paper-spread" value="0.02" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
+                            </div>
+                            
+                            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+                                <button type="submit" class="btn-success" style="flex: 1; font-weight: 600;">Start Session</button>
+                                <button type="button" class="btn-danger" onclick="stopPaperSession()" style="flex: 1; font-weight: 600;">Stop Session</button>
+                            </div>
+                        </form>
+                        <div id="paper-status-msg" style="text-align: center; font-size: 0.8rem; margin-top: 0.75rem; font-weight: 500;"></div>
+                    </div>
+                </div>
+                
+                <!-- COLUMN 2: Live Metrics & Virtual Tables -->
+                <div class="grid-col flex-col">
+                    <!-- Session Metrics Cards -->
+                    <div class="summary-cards-container" style="grid-template-columns: repeat(4, 1fr);">
+                        <div class="metric-card">
+                            <span class="label">Virtual Capital</span>
+                            <span class="value text-green" id="paper-capital">₹1,000,000.00</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Session Net P&amp;L</span>
+                            <span class="value" id="paper-pnl">₹0.00</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Trades Executed</span>
+                            <span class="value" id="paper-trades-count">0</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="label">Session Win Rate</span>
+                            <span class="value accent-blue" id="paper-win-rate">0.0%</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Paper Positions -->
+                    <div class="card flex-grow-1">
+                        <h2>Paper Open Positions</h2>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Side</th>
+                                        <th>Qty</th>
+                                        <th>Avg Price</th>
+                                        <th>LTP</th>
+                                        <th>P&amp;L</th>
+                                        <th>Exit</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="paper-positions-body">
+                                    <tr>
+                                        <td colspan="7" class="text-center text-muted">No open virtual positions. Start a session to trade.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+                
             </div>
         </div>
 

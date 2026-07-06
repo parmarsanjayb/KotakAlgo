@@ -1,4 +1,4 @@
-// SPV Quantum AI Operating System - Dashboard Controller v2
+// SPV Quantum AI Operating System - Dashboard Controller v2.0.4
 document.addEventListener("DOMContentLoaded", () => {
     const apiBase = window.location.origin;
     const wsUri = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let pnlChart = null;
     let accuracyChart = null;
     let ws;
+    let selectedSymbol = "NIFTY50"; // Default active symbol
 
     window.switchTab = function(tabId) {
         document.querySelectorAll(".nav-tabs .tab-btn").forEach(btn => {
@@ -41,9 +42,12 @@ document.addEventListener("DOMContentLoaded", () => {
         if (tabId === "tab-settings") {
             fetchSystemSettings();
         }
+        if (tabId === "tab-paper") {
+            fetchPaperStatus();
+        }
     };
 
-    // REST Interval loops
+    // REST Interval loops (Fallback)
     let metricsInterval;
     let portfolioInterval;
     let telemetryInterval;
@@ -85,7 +89,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
     }
 
-    // Event router
+    // Event router (WebSockets Event Driven update)
     function handleBusEvent(event) {
         const { topic, sender, timestamp, data } = event;
         const formattedTime = new Date(timestamp).toLocaleTimeString();
@@ -99,24 +103,54 @@ document.addEventListener("DOMContentLoaded", () => {
             appendTerminalLog(sender, topic, JSON.stringify(data), getTopicStyle(topic));
         }
 
-        // Live prices
+        // Live Event Routing
         if (topic === "market_data" || topic === "tick") {
             updatePriceWidget(data);
-        } else if (topic === "order_filled" || topic === "paper_order_filled") {
+        } else if (topic === "order_submitted" || topic === "order_filled" || topic === "order_rejected" || topic === "order_cancelled" || topic === "execution_failed" ||
+                   topic === "paper_order_placed" || topic === "paper_order_filled" || topic === "paper_trade_closed") {
             refreshTables();
             fetchEmployeeData();
             fetchSystemAnalytics();
+            fetchPaperStatus();
+        } else if (topic === "portfolio_summary_updated") {
+            updatePortfolioSummaryUI(data.summary || data);
+        } else if (topic === "position_opened" || topic === "position_updated" || topic === "position_closed") {
+            refreshTables();
+            fetchPaperStatus();
+        } else if (topic === "system_telemetry") {
+            updateTelemetryUI(data);
         } else if (topic === "volume_intelligence_update") {
-            updateVolumeIntelligenceUI(data);
+            if (data.symbol === selectedSymbol) {
+                updateVolumeIntelligenceUI(data);
+            }
         } else if (topic === "option_flow_updated") {
-            updateOptionFlowUI(data);
+            if (data.underlying === selectedSymbol) {
+                updateOptionFlowUI(data);
+            }
         } else if (topic === "trend_updated") {
-            updateTrendIntelUI(data);
+            if (data.symbol === selectedSymbol) {
+                updateTrendIntelUI(data);
+            }
+        } else if (topic === "market_regime") {
+            if (data.symbol === selectedSymbol) {
+                const trendEl = document.getElementById("trend-classification");
+                if (trendEl) {
+                    trendEl.textContent = data.market_regime || data.market_regime_value || "UNKNOWN";
+                    trendEl.className = `badge ${
+                        (data.market_regime || "").includes("BULLISH") ? "badge active" :
+                        (data.market_regime || "").includes("BEARISH") ? "badge failed" : "badge inactive"
+                    }`;
+                }
+            }
         } else if (topic === "employee_decision" || topic === "trade_approved" || topic === "trade_rejected" || topic === "trade_blocked") {
             handleEmployeeDecision(data);
         } else if (topic === "employee_profile_updated" || topic === "employee_status_updated") {
             fetchEmployeeData();
             fetchSystemAnalytics();
+        } else if (topic === "paper_trade_started" || topic === "paper_trade_stopped") {
+            fetchPaperStatus();
+            fetchBrokerStatus();
+            refreshTables();
         }
     }
 
@@ -208,20 +242,22 @@ document.addEventListener("DOMContentLoaded", () => {
             refreshTables(),
             fetchSystemSettings(),
             fetchDecisionHistory(),
-            fetchSystemAnalytics()
+            fetchSystemAnalytics(),
+            fetchPaperStatus()
         ]);
 
-        // Start loops
+        // Start fallback loops (UI updates mainly driven by WebSockets)
         portfolioInterval = setInterval(() => {
             refreshTables();
             fetchSystemAnalytics();
-        }, 3000);
+        }, 5000);
         telemetryInterval = setInterval(() => {
             fetchTelemetryData();
             fetchVolumeIntelligenceData();
             fetchOptionFlowData();
             fetchTrendIntelData();
-        }, 3000);
+            fetchPaperStatus();
+        }, 5000);
     }
 
     // Fetch employee registry
@@ -320,9 +356,18 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch(`${apiBase}/api/health/status`);
             const health = await res.json();
+            updateTelemetryUI(health);
+        } catch (e) {
+            console.error("Failed to fetch telemetry data", e);
+        }
+    }
 
-            // Status bar health
-            const healthEl = document.getElementById("top-health");
+    function updateTelemetryUI(health) {
+        if (!health) return;
+        
+        // Status bar health
+        const healthEl = document.getElementById("top-health");
+        if (healthEl) {
             healthEl.textContent = health.overall_system_health;
             if (health.overall_system_health === "HEALTHY") {
                 healthEl.className = "value text-green";
@@ -331,25 +376,31 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 healthEl.className = "value text-red";
             }
-
-            // CPU
-            document.getElementById("sys-cpu-val").textContent = `${health.cpu_usage_pct}%`;
-            document.getElementById("sys-cpu-fill").style.width = `${health.cpu_usage_pct}%`;
-
-            // Memory
-            document.getElementById("sys-mem-val").textContent = `${health.memory_usage_pct}%`;
-            document.getElementById("sys-mem-fill").style.width = `${health.memory_usage_pct}%`;
-
-            // Latencies
-            document.getElementById("sys-net-latency").textContent = `${health.latency.internet_latency_ms}ms`;
-            document.getElementById("sys-broker-latency").textContent = `${health.latency.broker_latency_ms}ms`;
-            document.getElementById("sys-db-latency").textContent = `${health.latency.database_latency_ms}ms`;
-            
-            // Queue size
-            document.getElementById("sys-queue-size").textContent = health.event_queue_health.event_bus_queue_size;
-        } catch (e) {
-            console.error("Failed to fetch telemetry data", e);
         }
+
+        // CPU
+        const cpuVal = document.getElementById("sys-cpu-val");
+        const cpuFill = document.getElementById("sys-cpu-fill");
+        if (cpuVal) cpuVal.textContent = `${health.cpu_usage_pct}%`;
+        if (cpuFill) cpuFill.style.width = `${health.cpu_usage_pct}%`;
+
+        // Memory
+        const memVal = document.getElementById("sys-mem-val");
+        const memFill = document.getElementById("sys-mem-fill");
+        if (memVal) memVal.textContent = `${health.memory_usage_pct}%`;
+        if (memFill) memFill.style.width = `${health.memory_usage_pct}%`;
+
+        // Latencies
+        const netLat = document.getElementById("sys-net-latency");
+        const brokerLat = document.getElementById("sys-broker-latency");
+        const dbLat = document.getElementById("sys-db-latency");
+        if (netLat) netLat.textContent = `${health.latency.internet_latency_ms}ms`;
+        if (brokerLat) brokerLat.textContent = `${health.latency.broker_latency_ms}ms`;
+        if (dbLat) dbLat.textContent = `${health.latency.database_latency_ms}ms`;
+        
+        // Queue size
+        const qSize = document.getElementById("sys-queue-size");
+        if (qSize) qSize.textContent = health.event_queue_health.event_bus_queue_size;
     }
 
     // Fetch portfolio summary
@@ -357,24 +408,28 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch(`${apiBase}/api/portfolio/summary`);
             const sum = await res.json();
-
-            document.getElementById("card-capital").textContent = `₹${sum.available_capital.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-            
-            const portfolioVal = sum.available_capital + sum.mtm;
-            document.getElementById("card-portfolio-val").textContent = `₹${portfolioVal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-            
-            const todayPnlEl = document.getElementById("card-today-pnl");
-            todayPnlEl.textContent = `${sum.realized_pnl >= 0 ? '+' : ''}₹${sum.realized_pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-            todayPnlEl.className = sum.realized_pnl >= 0 ? "value text-green" : "value text-red";
-
-            const totalPnlEl = document.getElementById("card-total-pnl");
-            totalPnlEl.textContent = `${sum.mtm >= 0 ? '+' : ''}₹${sum.mtm.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-            totalPnlEl.className = sum.mtm >= 0 ? "value text-green" : "value text-red";
-
-            document.getElementById("card-margin").textContent = `₹${sum.utilized_margin.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            updatePortfolioSummaryUI(sum);
         } catch (e) {
             console.error("Failed to fetch portfolio summary", e);
         }
+    }
+
+    function updatePortfolioSummaryUI(sum) {
+        if (!sum) return;
+        document.getElementById("card-capital").textContent = `₹${sum.available_capital.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        
+        const portfolioVal = sum.available_capital + sum.mtm;
+        document.getElementById("card-portfolio-val").textContent = `₹${portfolioVal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        
+        const todayPnlEl = document.getElementById("card-today-pnl");
+        todayPnlEl.textContent = `${sum.realized_pnl >= 0 ? '+' : ''}₹${sum.realized_pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        todayPnlEl.className = sum.realized_pnl >= 0 ? "value text-green" : "value text-red";
+
+        const totalPnlEl = document.getElementById("card-total-pnl");
+        totalPnlEl.textContent = `${sum.mtm >= 0 ? '+' : ''}₹${sum.mtm.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+        totalPnlEl.className = sum.mtm >= 0 ? "value text-green" : "value text-red";
+
+        document.getElementById("card-margin").textContent = `₹${sum.utilized_margin.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     }
 
     // Fetch active positions
@@ -432,6 +487,7 @@ document.addEventListener("DOMContentLoaded", () => {
             const r = await res.json();
             appendTerminalLog("execution_engine", "exit_position", `Closed position in ${symbol}.`);
             await refreshTables();
+            await fetchPaperStatus();
         } catch (e) {
             console.error("Failed to exit position", e);
         }
@@ -453,14 +509,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
             trades.forEach(t => {
                 const tr = document.createElement("tr");
-                const pnlClass = t.realized_pnl >= 0 ? "text-green" : "text-red";
+                const realizedPnl = typeof t.realized_pnl === 'number' ? t.realized_pnl : 0.0;
+                const pnlClass = realizedPnl >= 0 ? "text-green" : "text-red";
                 tr.innerHTML = `
                     <td><b>${t.symbol}</b></td>
                     <td><span class="${t.side === 'BUY' ? 'text-green' : 'text-red'}">${t.side}</span></td>
                     <td>${t.quantity}</td>
                     <td>₹${t.price.toFixed(2)}</td>
                     <td>₹${t.commission.toFixed(4)}</td>
-                    <td class="${pnlClass}">₹${t.realized_pnl.toFixed(2)}</td>
+                    <td class="${pnlClass}">₹${realizedPnl.toFixed(2)}</td>
                     <td>${new Date(t.executed_at).toLocaleTimeString()}</td>
                 `;
                 tradesBody.appendChild(tr);
@@ -500,6 +557,25 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Select Active Watchlist Symbol
+    window.selectSymbol = function(symbol) {
+        selectedSymbol = symbol;
+        document.querySelectorAll(".price-card").forEach(c => {
+            if (c.id === `price-card-${symbol}`) {
+                c.classList.add("active-symbol");
+            } else {
+                c.classList.remove("active-symbol");
+            }
+        });
+        
+        // Refresh intelligence blocks
+        fetchVolumeIntelligenceData();
+        fetchOptionFlowData();
+        fetchTrendIntelData();
+        
+        appendTerminalLog("system", "select_symbol", `Selected active monitor symbol: ${symbol}`);
+    };
+
     // Live price widget
     function updatePriceWidget(tick) {
         const { symbol, close } = tick;
@@ -510,12 +586,13 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!card) {
             card = document.createElement("div");
             card.id = `price-card-${symbol}`;
-            card.className = "price-card";
+            card.className = `price-card ${symbol === selectedSymbol ? 'active-symbol' : ''}`;
             card.innerHTML = `
                 <div class="symbol">${symbol}</div>
                 <div class="price" id="price-val-${symbol}">₹${close.toFixed(2)}</div>
                 <div class="change text-green" id="price-change-${symbol}">+0.00%</div>
             `;
+            card.addEventListener("click", () => selectSymbol(symbol));
             document.getElementById("prices-row").appendChild(card);
         } else {
             const priceVal = document.getElementById(`price-val-${symbol}`);
@@ -541,7 +618,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     function recalculateGainersLosers() {
-        // Automatically rank and display gainers and losers
         const tickers = Object.keys(activePrices).map(sym => {
             const priceEl = document.getElementById(`price-change-${sym}`);
             const pct = priceEl ? parseFloat(priceEl.textContent) : 0.0;
@@ -604,6 +680,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function appendTerminalLog(sender, topic, dataStr, customStyle = "") {
         const terminal = document.getElementById("terminal-logs");
+        if (!terminal) return;
         const entry = document.createElement("div");
         entry.className = "log-entry";
         const time = new Date().toLocaleTimeString();
@@ -623,8 +700,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchVolumeIntelligenceData() {
         try {
-            const symbol = "BTCUSD"; // Default symbol or select active symbol
-            const res = await fetch(`${apiBase}/api/volume_intelligence/status?symbol=${symbol}`);
+            const res = await fetch(`${apiBase}/api/volume_intelligence/status?symbol=${selectedSymbol}`);
             const data = await res.json();
             updateVolumeIntelligenceUI(data);
         } catch (e) {
@@ -654,8 +730,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchOptionFlowData() {
         try {
-            const symbol = "NIFTY50";
-            const res = await fetch(`${apiBase}/api/option_flow/status?symbol=${symbol}`);
+            const res = await fetch(`${apiBase}/api/option_flow/status?symbol=${selectedSymbol}`);
             const data = await res.json();
             updateOptionFlowUI(data);
         } catch (e) {
@@ -716,8 +791,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchTrendIntelData() {
         try {
-            const symbol = "NIFTY50";
-            const res = await fetch(`${apiBase}/api/trend_intelligence/status?symbol=${symbol}`);
+            const res = await fetch(`${apiBase}/api/trend_intelligence/status?symbol=${selectedSymbol}`);
             const data = await res.json();
             updateTrendIntelUI(data);
         } catch (e) {
@@ -976,7 +1050,6 @@ document.addEventListener("DOMContentLoaded", () => {
             historyLabels = accHistory.map((h, idx) => `Sig ${idx + 1}`);
             historyData = accHistory.map(h => h.accuracy_pct);
         } else {
-            // Default baseline values
             historyLabels = ['Sig 1', 'Sig 2', 'Sig 3', 'Sig 4', 'Sig 5'];
             historyData = [100, 100, 100, 100, 100];
         }
@@ -1172,7 +1245,6 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Set up live filter search input
     document.getElementById("decisions-search")?.addEventListener("input", renderDecisionLog);
 
     window.clearDecisionLog = function() {
@@ -1244,7 +1316,6 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 appendTerminalLog("system", "config_update", `Active broker switched to ${payload.active_broker}. Risk metrics updated.`);
                 
-                // Refresh top metrics & safety status
                 fetchBrokerStatus();
                 fetchSafetyData();
                 fetchEmployeeData();
@@ -1256,6 +1327,144 @@ document.addEventListener("DOMContentLoaded", () => {
             }
         } catch (e) {
             console.error("Failed to save settings", e);
+            if (statusMsg) {
+                statusMsg.textContent = "Failed to communicate with server.";
+                statusMsg.style.color = "var(--accent-red)";
+            }
+        }
+    };
+
+    // --- PAPER TRADING CONTROLS ---
+    async function fetchPaperStatus() {
+        try {
+            const res = await fetch(`${apiBase}/api/paper/status`);
+            const data = await res.json();
+            
+            document.getElementById("paper-sess-id").textContent = data.session_id || "-";
+            
+            const statusEl = document.getElementById("paper-sess-status");
+            statusEl.textContent = data.is_running ? "ACTIVE" : "STOPPED";
+            statusEl.className = `badge ${data.is_running ? "text-green" : "text-red"}`;
+            
+            document.getElementById("paper-capital").textContent = `₹${data.virtual_capital.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            
+            const pnlEl = document.getElementById("paper-pnl");
+            pnlEl.textContent = `${data.virtual_pnl >= 0 ? '+' : ''}₹${data.virtual_pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            pnlEl.className = data.virtual_pnl >= 0 ? "value text-green" : "value text-red";
+            
+            document.getElementById("paper-trades-count").textContent = data.trades_executed;
+            document.getElementById("paper-win-rate").textContent = `${data.win_rate.toFixed(1)}%`;
+            
+            // Populate paper positions
+            const posRes = await fetch(`${apiBase}/api/portfolio/positions`);
+            const posData = await posRes.json();
+            const paperPosBody = document.getElementById("paper-positions-body");
+            
+            paperPosBody.innerHTML = "";
+            if (posData.open_positions.length === 0) {
+                paperPosBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">No open virtual positions. Start a session to trade.</td></tr>`;
+            } else {
+                posData.open_positions.forEach(p => {
+                    const tr = document.createElement("tr");
+                    const pnlClass = p.unrealized_pnl >= 0 ? "text-green" : "text-red";
+                    tr.innerHTML = `
+                        <td><b>${p.symbol}</b></td>
+                        <td><span class="${p.side === 'BUY' ? 'text-green' : 'text-red'}">${p.side}</span></td>
+                        <td>${p.quantity}</td>
+                        <td>₹${p.avg_price.toFixed(2)}</td>
+                        <td>₹${p.ltp.toFixed(2)}</td>
+                        <td class="${pnlClass}">₹${p.unrealized_pnl.toFixed(2)}</td>
+                        <td><button class="btn-danger btn-xs" onclick="exitPosition('${p.symbol}', '${p.side}', ${p.quantity})">Exit</button></td>
+                    `;
+                    paperPosBody.appendChild(tr);
+                });
+            }
+        } catch (e) {
+            console.error("Failed to fetch paper status", e);
+        }
+    }
+    window.fetchPaperStatus = fetchPaperStatus;
+
+    window.startPaperSession = async function(event) {
+        if (event) event.preventDefault();
+        const statusMsg = document.getElementById("paper-status-msg");
+        if (statusMsg) {
+            statusMsg.textContent = "Starting session...";
+            statusMsg.style.color = "var(--text-secondary)";
+        }
+        
+        const payload = {
+            initial_capital: parseFloat(document.getElementById("paper-init-capital").value || 1000000),
+            latency_ms: parseFloat(document.getElementById("paper-latency").value || 50),
+            slippage_pct: parseFloat(document.getElementById("paper-slippage").value || 0.05) / 100,
+            spread_pct: parseFloat(document.getElementById("paper-spread").value || 0.02) / 100
+        };
+        
+        try {
+            const res = await fetch(`${apiBase}/api/paper/start`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            });
+            const r = await res.json();
+            if (res.ok && r.status === "SUCCESS") {
+                if (statusMsg) {
+                    statusMsg.textContent = "🚀 Paper Trading Session Started!";
+                    statusMsg.style.color = "var(--accent-green)";
+                }
+                appendTerminalLog("system", "paper_start", `Paper trading session started: ${r.session_id}`);
+                
+                const selectBroker = document.getElementById("settings-active-broker");
+                if (selectBroker) {
+                    selectBroker.value = "paper_broker";
+                    toggleCredentialsVisibility();
+                }
+                
+                fetchPaperStatus();
+                fetchBrokerStatus();
+                refreshTables();
+            } else {
+                if (statusMsg) {
+                    statusMsg.textContent = `Error: ${r.detail || 'Start failed'}`;
+                    statusMsg.style.color = "var(--accent-red)";
+                }
+            }
+        } catch (e) {
+            console.error("Failed to start paper session", e);
+            if (statusMsg) {
+                statusMsg.textContent = "Failed to communicate with server.";
+                statusMsg.style.color = "var(--accent-red)";
+            }
+        }
+    };
+
+    window.stopPaperSession = async function() {
+        const statusMsg = document.getElementById("paper-status-msg");
+        if (statusMsg) {
+            statusMsg.textContent = "Stopping session...";
+            statusMsg.style.color = "var(--text-secondary)";
+        }
+        
+        try {
+            const res = await fetch(`${apiBase}/api/paper/stop`, { method: "POST" });
+            const r = await res.json();
+            if (res.ok && r.status === "SUCCESS") {
+                if (statusMsg) {
+                    statusMsg.textContent = "🛑 Paper Session Stopped.";
+                    statusMsg.style.color = "var(--accent-red)";
+                }
+                appendTerminalLog("system", "paper_stop", "Paper trading session stopped.");
+                fetchPaperStatus();
+                fetchBrokerStatus();
+                refreshTables();
+            } else {
+                if (statusMsg) {
+                    statusMsg.textContent = `Error: ${r.detail || 'Stop failed'}`;
+                    statusMsg.style.color = "var(--accent-red)";
+                }
+            }
+        } catch (e) {
+            console.error("Failed to stop paper session", e);
             if (statusMsg) {
                 statusMsg.textContent = "Failed to communicate with server.";
                 statusMsg.style.color = "var(--accent-red)";
