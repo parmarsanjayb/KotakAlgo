@@ -53,10 +53,53 @@ class MarketDataManager:
 
         await self.status.set_status(MarketSession.OPEN)
         await self.health.start()
+        await self._seed_historical_candles()
         await self.stream.start()
 
         self._options_task = asyncio.create_task(self._options_loop())
         logger.info("Market Data Engine running.")
+
+    async def _seed_historical_candles(self) -> None:
+        logger.info("Seeding historical 1m candles to warm up all caches...")
+        import random
+        from datetime import datetime, timedelta, timezone
+        from market.models import Timeframe, Candle
+
+        now = datetime.now(timezone.utc)
+        symbols = self.registry.get_symbols()
+        base_prices = {"BTCUSD": 65000.0, "ETHUSD": 3500.0, "NIFTY50": 24200.0, "BANKNIFTY": 58294.80}
+
+        for symbol in symbols:
+            price = base_prices.get(symbol, 100.0)
+            for i in range(35):
+                ts = now - timedelta(minutes=(35 - i))
+                change = random.uniform(-0.001, 0.001)
+                o = price
+                c = price * (1.0 + change)
+                h = max(o, c) * random.uniform(1.0, 1.002)
+                l = min(o, c) * random.uniform(0.998, 1.0)
+                v = random.uniform(100.0, 1000.0)
+                price = c
+
+                candle = Candle(
+                    symbol=symbol,
+                    timeframe=Timeframe.M1,
+                    timestamp=ts,
+                    open=round(o, 4),
+                    high=round(h, 4),
+                    low=round(l, 4),
+                    close=round(c, 4),
+                    volume=round(v, 4),
+                    vwap=round((o + h + l + c) / 4, 4),
+                )
+                await self.cache.update_candle(candle)
+                
+                # Publish event
+                await event_bus.publish(EventModel(
+                    event_type="candle",
+                    source_agent="market_data_manager",
+                    payload={"candle": candle.model_dump()}
+                ))
 
     async def stop(self) -> None:
         self._running = False

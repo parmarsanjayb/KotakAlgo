@@ -84,6 +84,11 @@ async def lifespan(app: FastAPI):
     # 3. Bind WebSocket broadcaster to event bus
     await event_bus.subscribe_all(ws_event_broadcaster)
     
+    # 3.5 Start Market Data Engine
+    from market.manager import market_data_manager
+    await market_data_manager.start()
+    app.state.market_data_manager = market_data_manager
+    
     # 4. Load active broker
     from brokers import broker_engine
     await broker_engine.connect()
@@ -185,6 +190,8 @@ async def lifespan(app: FastAPI):
     
     # Clean shutdown
     logger.info("Shutting down core engine...")
+    from market.manager import market_data_manager
+    await market_data_manager.stop()
     from employees import employee_engine
     await employee_engine.stop()
     from health import system_health_engine
