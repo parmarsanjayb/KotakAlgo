@@ -581,8 +581,11 @@ class RiskEmployee(BaseNewSpecialist):
 
 
 class PositionSizingEmployee(BaseNewSpecialist):
+    """Volatility-based position sizing: high recent range => REDUCE SIZE,
+    calm market => NORMAL SIZE. Not a directional signal (no fake BUY)."""
     def __init__(self) -> None:
         super().__init__("EMP-PZS", "WAIT")
+        self._hist: Dict[str, List[float]] = {}
 
     async def start(self) -> None:
         await super().start()
@@ -594,14 +597,27 @@ class PositionSizingEmployee(BaseNewSpecialist):
 
     async def _on_candle(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            raw_candle = payload.get("candle", payload)
-            symbol = raw_candle.get("symbol", "NIFTY50")
-            # Determine mock sizing recommendations
+            c = event.payload.get("candle", event.payload)
+            if not c.get("complete", False):
+                return
+            symbol = c.get("symbol", "NIFTY50")
+            high, low, close = float(c.get("high", 0.0)), float(c.get("low", 0.0)), float(c.get("close", 0.0))
+            rng_pct = (high - low) / close * 100.0 if close else 0.0
+            h = self._hist.setdefault(symbol, [])
+            h.append(rng_pct)
+            if len(h) > 20:
+                h.pop(0)
+            vol = sum(h) / len(h) if h else 0.0
+            if vol > 2.0:
+                rec, conf = "REDUCE SIZE", 75.0
+            elif vol < 0.8:
+                rec, conf = "NORMAL SIZE", 70.0
+            else:
+                rec, conf = "MODERATE SIZE", 65.0
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 70.0,
+                    "recommendation": rec, "confidence": conf,
+                    "avg_range_pct": round(vol, 3),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1105,12 +1121,15 @@ class ExecutionEmployee(BaseNewSpecialist):
 
     async def _on_order(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("symbol", "NIFTY50")
+            p = event.payload
+            symbol = p.get("symbol") or p.get("order", {}).get("symbol", "NIFTY50")
+            side = p.get("side") or p.get("order", {}).get("side", "")
+            # Operational tracker — reports execution status, not a trade signal.
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 75.0,
+                    "recommendation": "EXECUTED",
+                    "confidence": 100.0,
+                    "last_fill_side": side,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1131,12 +1150,15 @@ class PortfolioEmployee(BaseNewSpecialist):
 
     async def _on_portfolio(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = "SYSTEM"
+            p = event.payload
+            pnl = float(p.get("realized_pnl", 0.0) or 0.0) + float(p.get("unrealized_pnl", 0.0) or 0.0)
+            # Operational tracker — reports P&L status, not a trade signal.
+            rec = "PROFIT" if pnl > 0 else "LOSS" if pnl < 0 else "FLAT"
             async with self._lock:
-                self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 70.0,
+                self.latest_results["SYSTEM"] = {
+                    "recommendation": rec,
+                    "confidence": 100.0,
+                    "net_pnl": round(pnl, 2),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1190,12 +1212,28 @@ class OptionsSpecialistEmployee(BaseNewSpecialist):
 
     async def _on_chain(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("underlying_symbol", "NIFTY")
+            underlying, spot, ce, pe = _parse_chain(event.payload)
+            if not ce and not pe:
+                return
+            ce_oi = sum(x[1] for x in ce)
+            pe_oi = sum(x[1] for x in pe)
+            pcr = (pe_oi / ce_oi) if ce_oi else 1.0
+            # Composite view: PCR bias + OI imbalance vote together
+            votes = 0
+            if pcr > 1.2:
+                votes += 1
+            elif pcr < 0.8:
+                votes -= 1
+            if pe_oi > ce_oi * 1.1:
+                votes += 1
+            elif ce_oi > pe_oi * 1.1:
+                votes -= 1
+            rec = "BUY" if votes > 0 else "SELL" if votes < 0 else "WAIT"
             async with self._lock:
-                self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 70.0,
+                self.latest_results[underlying] = {
+                    "recommendation": rec,
+                    "confidence": round(min(90.0, 55.0 + abs(votes) * 15.0 + abs(pcr - 1.0) * 15.0), 1),
+                    "pcr": round(pcr, 3),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1398,12 +1436,15 @@ class PortfolioManagerEmployee(BaseNewSpecialist):
 
     async def _on_portfolio(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = "SYSTEM"
+            p = event.payload
+            pnl = float(p.get("realized_pnl", 0.0) or 0.0) + float(p.get("unrealized_pnl", 0.0) or 0.0)
+            # Operational tracker — reports portfolio health, not a trade signal.
+            rec = "AT RISK" if pnl < -1000.0 else "HEALTHY"
             async with self._lock:
-                self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 70.0,
+                self.latest_results["SYSTEM"] = {
+                    "recommendation": rec,
+                    "confidence": 100.0,
+                    "net_pnl": round(pnl, 2),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
