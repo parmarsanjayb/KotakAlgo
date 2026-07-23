@@ -208,7 +208,34 @@ class MarketRegimeEmployee(BaseNewSpecialist):
 
 # ── Options Intelligence Department ─────────────────────────────────────────
 
+# ── Shared option-chain parser for the Options Intelligence employees ────────
+# The option_chain_updated event payload is {"option_chain": {underlying,
+# underlying_price, contracts: [{strike, option_type, open_interest, ltp}, ...]}}.
+# (These employees previously read non-existent 'calls'/'puts'/'pcr' keys and so
+# always fell back to WAIT — now they read the real chain, same as EMP-OFT.)
+def _parse_chain(payload: Dict[str, Any]):
+    """Return (underlying, spot, ce, pe) where ce/pe are [(strike, oi, ltp), ...]."""
+    chain = payload.get("option_chain", payload) if isinstance(payload, dict) else {}
+    contracts = chain.get("contracts", []) or []
+    underlying = chain.get("underlying", "NIFTY")
+    spot = float(chain.get("underlying_price", 0.0) or 0.0)
+    ce, pe = [], []
+    for c in contracts:
+        try:
+            row = (float(c.get("strike", 0.0)), float(c.get("open_interest", 0.0) or 0.0),
+                   float(c.get("ltp", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            continue
+        if c.get("option_type") == "CE":
+            ce.append(row)
+        elif c.get("option_type") == "PE":
+            pe.append(row)
+    return underlying, spot, ce, pe
+
+
 class OIEmployee(BaseNewSpecialist):
+    """Open-interest imbalance: PE-heavy chain = support (BUY bias), CE-heavy =
+    resistance (SELL bias). Reads real chain OI."""
     def __init__(self) -> None:
         super().__init__("EMP-OIE", "WAIT")
 
@@ -222,21 +249,23 @@ class OIEmployee(BaseNewSpecialist):
 
     async def _on_chain(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("underlying_symbol", "NIFTY")
-            ce_oi = sum(c.get("open_interest", 0) for c in payload.get("calls", []))
-            pe_oi = sum(c.get("open_interest", 0) for c in payload.get("puts", []))
-            
+            underlying, spot, ce, pe = _parse_chain(event.payload)
+            if not ce and not pe:
+                return
+            ce_oi = sum(x[1] for x in ce)
+            pe_oi = sum(x[1] for x in pe)
+
             rec = "WAIT"
             if pe_oi > ce_oi * 1.1:
                 rec = "BUY"
             elif ce_oi > pe_oi * 1.1:
                 rec = "SELL"
-                
+
             async with self._lock:
-                self.latest_results[symbol] = {
+                self.latest_results[underlying] = {
                     "recommendation": rec,
-                    "confidence": float(min(100.0, 50.0 + abs(pe_oi - ce_oi) / max(1.0, ce_oi + pe_oi) * 100.0)),
+                    "confidence": round(min(95.0, 50.0 + abs(pe_oi - ce_oi) / max(1.0, ce_oi + pe_oi) * 90.0), 1),
+                    "ce_oi": round(ce_oi, 0), "pe_oi": round(pe_oi, 0),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -257,20 +286,24 @@ class PCREmployee(BaseNewSpecialist):
 
     async def _on_chain(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("underlying_symbol", "NIFTY")
-            pcr = float(payload.get("pcr", 1.0))
-            
+            underlying, spot, ce, pe = _parse_chain(event.payload)
+            if not ce and not pe:
+                return
+            ce_oi = sum(x[1] for x in ce)
+            pe_oi = sum(x[1] for x in pe)
+            pcr = (pe_oi / ce_oi) if ce_oi else 1.0
+
             rec = "WAIT"
             if pcr > 1.2:
                 rec = "BUY"
             elif pcr < 0.8:
                 rec = "SELL"
-                
+
             async with self._lock:
-                self.latest_results[symbol] = {
+                self.latest_results[underlying] = {
                     "recommendation": rec,
-                    "confidence": float(min(100.0, 50.0 + abs(pcr - 1.0) * 50.0)),
+                    "confidence": round(min(95.0, 50.0 + abs(pcr - 1.0) * 50.0), 1),
+                    "pcr": round(pcr, 3),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -291,23 +324,25 @@ class GreeksEmployee(BaseNewSpecialist):
 
     async def _on_chain(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("underlying_symbol", "NIFTY")
-            # Calculate mock net Greeks (Delta bias)
-            calls = payload.get("calls", [])
-            puts = payload.get("puts", [])
-            delta_bias = len(calls) - len(puts)
-            
-            rec = "WAIT"
-            if delta_bias > 2:
-                rec = "BUY"
-            elif delta_bias < -2:
-                rec = "SELL"
-                
+            underlying, spot, ce, pe = _parse_chain(event.payload)
+            if spot <= 0 or (not ce and not pe):
+                return
+            # No IV in the feed, so approximate each contract's delta from moneyness:
+            # CE delta in [0,1] rising as spot clears the strike; PE delta in [-1,0].
+            # OI-weighted net delta > 0 => option positioning is net-long (bullish).
+            def ce_delta(strike: float) -> float:
+                return max(0.0, min(1.0, 0.5 + (spot - strike) / spot * 8.0))
+            def pe_delta(strike: float) -> float:
+                return -max(0.0, min(1.0, 0.5 + (strike - spot) / spot * 8.0))
+            net = sum(oi * ce_delta(s) for s, oi, _ in ce) + sum(oi * pe_delta(s) for s, oi, _ in pe)
+            total_oi = sum(oi for _, oi, _ in ce) + sum(oi for _, oi, _ in pe)
+            norm = (net / total_oi) if total_oi else 0.0
+            rec = "BUY" if norm > 0.1 else "SELL" if norm < -0.1 else "WAIT"
             async with self._lock:
-                self.latest_results[symbol] = {
+                self.latest_results[underlying] = {
                     "recommendation": rec,
-                    "confidence": 65.0,
+                    "confidence": round(min(90.0, 50.0 + abs(norm) * 60.0), 1),
+                    "net_delta_bias": round(norm, 3),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -328,21 +363,29 @@ class MaxPainEmployee(BaseNewSpecialist):
 
     async def _on_chain(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("underlying_symbol", "NIFTY")
-            atm_strike = float(payload.get("atm_strike", 0.0))
-            max_pain = float(payload.get("max_pain", atm_strike))
-            
-            rec = "WAIT"
-            if atm_strike < max_pain:
-                rec = "BUY"
-            elif atm_strike > max_pain:
-                rec = "SELL"
-                
+            underlying, spot, ce, pe = _parse_chain(event.payload)
+            if spot <= 0 or (not ce and not pe):
+                return
+            strikes = sorted({s for s, _, _ in ce} | {s for s, _, _ in pe})
+            if not strikes:
+                return
+            # Real max pain: the expiry price at which total option payout to buyers
+            # is minimised (writers' pain lowest). Price tends to drift toward it.
+            best_strike, best_pain = spot, None
+            for P in strikes:
+                ce_pay = sum(max(0.0, P - s) * oi for s, oi, _ in ce)
+                pe_pay = sum(max(0.0, s - P) * oi for s, oi, _ in pe)
+                total = ce_pay + pe_pay
+                if best_pain is None or total < best_pain:
+                    best_pain, best_strike = total, P
+            max_pain = best_strike
+            rec = "BUY" if spot < max_pain else "SELL" if spot > max_pain else "WAIT"
+            dist_pct = (abs(spot - max_pain) / spot * 100.0) if spot else 0.0
             async with self._lock:
-                self.latest_results[symbol] = {
+                self.latest_results[underlying] = {
                     "recommendation": rec,
-                    "confidence": 60.0,
+                    "confidence": round(min(85.0, 50.0 + dist_pct * 15.0), 1),
+                    "max_pain": round(max_pain, 2), "spot": round(spot, 2),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
