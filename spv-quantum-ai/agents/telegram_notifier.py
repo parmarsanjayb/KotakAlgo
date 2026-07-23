@@ -24,7 +24,7 @@ class TelegramNotifier(BaseAgent):
 
     @property
     def input_event_types(self) -> List[str]:
-        types = ["risk_alert", "order_filled", "execution_failed"]
+        types = ["order_filled", "execution_failed"]
         # Rejections are routine internal filtering — the CEO rejects hundreds of
         # signals a day by design, so pushing them to Telegram spams the user.
         # They already appear in the dashboard Decision Log; opt-in for debugging.
