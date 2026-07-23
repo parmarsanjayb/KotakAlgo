@@ -18,7 +18,11 @@ INDICATOR_REGISTRY = {
     "STOCH_RSI":    {"family": "OSCILLATOR", "description": "Stochastic RSI (K, D)"},
     "CCI":          {"family": "OSCILLATOR", "period": 20,  "description": "Commodity Channel Index"},
     "ROC":          {"family": "OSCILLATOR", "period": 12,  "description": "Rate of Change"},
+    "ROC_1":        {"family": "OSCILLATOR", "period": 1,   "description": "1-day Rate of Change (% change vs previous close)"},
     "MOMENTUM":     {"family": "OSCILLATOR", "period": 10,  "description": "Price Momentum"},
+
+    # Raw price (exposed as an indicator so strategies can compare price to MAs)
+    "CLOSE":        {"family": "PRICE",      "description": "Latest close price"},
 
     # Trend
     "MACD":         {"family": "TREND", "description": "MACD (12,26,9)"},

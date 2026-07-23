@@ -1,0 +1,19 @@
+employees:
+  - employee_code: "EMP-OPT-15"
+    name: "Option 1:5 Ratio Specialist"
+    avatar: "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?q=80&w=120"
+    description: "Specialized in high risk-reward Call/Put option buying with strict 1:5 ratio target."
+    state: "ACTIVE"
+    employee_type: "Options Specialist"
+    allowed_segments: ["Options", "Equity"]
+    allowed_products: ["MIS", "NRML"]
+    allowed_timeframes: ["1m", "5m"]
+    allowed_strategies: ["options_1to5_ratio"]
+    allowed_risk_profiles: ["conservative", "moderate"]
+    max_open_trades: 5
+    max_exposure: 50000.0
+    max_daily_loss: 1000.0
+    max_daily_profit: 5000.0
+    trading_sessions: ["09:15-15:30"]
+    capital_allocation: 250000.0
+    confidence_threshold: 70.0

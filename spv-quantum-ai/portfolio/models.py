@@ -23,6 +23,7 @@ class Position(BaseModel):
     state: PositionState = PositionState.OPEN
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    user_id: str = "admin"
 
 class PortfolioSummary(BaseModel):
     realized_pnl: float = 0.0

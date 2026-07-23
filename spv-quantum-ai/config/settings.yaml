@@ -23,6 +23,9 @@ brokers:
     api_key: test_api_key_123
     client_id: '9999999999'
     enabled: false
+    mobile_number: ''
+    mpin: ''
+    totp_secret: ''
   paper_broker:
     commission_rate: 0.0003
     enabled: true
@@ -32,19 +35,13 @@ brokers:
     rejection_rate: 0.02
 decision_scoring:
   bonus_aligned_signals: 5.0
-  min_confidence_threshold: 60.0
+  min_confidence_threshold: 70.0
   penalty_conflicting_signals: 15.0
   weights:
     market_analysis: 0.3
     market_regime: 0.2
     risk_status: 0.25
     strategy_match: 0.25
-market_feed:
-  active: mock
-  binance:
-    url: wss://stream.binance.com:9443/ws
-  kotak:
-    url: wss://neo-api.kotaksecurities.com/apim/neotrade/1.0
 risk_limits:
   cooldown_period_minutes: 30
   daily_loss_limit_usd: 600.0

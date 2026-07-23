@@ -1,0 +1,280 @@
+From 670ed68a2cd9655632f4795d1fba724e948aa46a Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 14:50:04 +0000
+Subject: [PATCH 4/7] Fix 4 AI Employees permanently stuck on WAIT due to dead
+ event subscriptions
+
+Audited every employee that reacts to event-bus data (30 total) by cross-
+referencing every employees/*.py event_bus.subscribe() call against every
+event_type actually published anywhere in the codebase. Found 4 employees
+subscribed to event names that no producer ever publishes, so their
+`latest_results` cache was permanently empty and they only ever reported
+their hardcoded default_decision:
+
+- RiskEmployee (EMP-RSK): subscribed to "safety_status", which does not
+  exist as an event (it's only a dict key returned by SafetyEngine's
+  pull-style get_dashboard_metrics()). SafetyEngine.check_order() ->
+  SafetyManager.evaluate_order() actually emits "safety_blocked" /
+  "safety_check_passed" per order. Rewired to those two events.
+- MarketRegimeEmployee (EMP-RGM): subscribed to "regime_changed", which
+  nothing publishes; RegimeEngine actually publishes "market_regime". Also
+  fixed the handler, which read payload["regime"] instead of the real key
+  payload["market_regime"].
+- CapitalProtectionEmployee (EMP-CPT): subscribed to "pnl_update"; the real
+  event PortfolioEngine publishes is "pnl_updated" (trailing d).
+- PaperTradingEmployee (EMP-PPR): subscribed to "paper_status_changed",
+  which nothing publishes; PaperTradingEngine publishes "paper_trade_started"
+  / "paper_trade_stopped" instead. Rewired to react to both.
+
+Verified live against the running server: MarketRegimeEmployee and
+CapitalProtectionEmployee immediately began reporting real decisions
+(RANGE_BOUND/55%, BUY/85%) instead of their static defaults. RiskEmployee
+and PaperTradingEmployee are now correctly wired but, by design, only ever
+had something to report once an order is actually attempted or a paper
+session is started - their inputs are execution-reactive, not market-data-
+driven, so a permanent WAIT before the first order/session event is
+expected, not a bug.
+
+Audited the remaining employees too: all "candle"-driven and
+"option_chain_updated"-driven employees (Momentum, VWAP, SmartMoney,
+Liquidity, OrderFlow, News, EconomicCalendar, EventRisk, OI, PCR, Greeks,
+MaxPain, the specialist desks, VolumeIntelligence, TrendIntelligence,
+OptionFlowIntelligence) already subscribe to real, live-firing producers.
+Their current WAIT/NEUTRAL/NO TRADE outputs (e.g. TrendIntelligence needs
+20 completed candles before it emits anything but NO TRADE) are genuine
+warm-up states from receiving live mock-feed data, not wiring bugs.
+
+Added 4 regression tests (test_new_specialists.py) publishing the real
+event types and asserting each employee's latest_results updates.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/employees/new_specialists.py  |  38 +++---
+ spv-quantum-ai/tests/test_new_specialists.py | 118 +++++++++++++++++++
+ 2 files changed, 142 insertions(+), 14 deletions(-)
+
+diff --git a/spv-quantum-ai/employees/new_specialists.py b/spv-quantum-ai/employees/new_specialists.py
+index b9caa40..8b1be55 100644
+--- a/spv-quantum-ai/employees/new_specialists.py
++++ b/spv-quantum-ai/employees/new_specialists.py
+@@ -179,16 +179,17 @@ class MarketRegimeEmployee(BaseNewSpecialist):
+ 
+     async def start(self) -> None:
+         await super().start()
+-        await event_bus.subscribe("regime_changed", self._on_regime)
++        # RegimeEngine publishes "market_regime", not "regime_changed".
++        await event_bus.subscribe("market_regime", self._on_regime)
+ 
+     async def stop(self) -> None:
+         await super().stop()
+-        await event_bus.unsubscribe("regime_changed", self._on_regime)
++        await event_bus.unsubscribe("market_regime", self._on_regime)
+ 
+     async def _on_regime(self, event: EventModel) -> None:
+         try:
+             payload = event.payload
+-            regime = payload.get("regime", "Sideways")
++            regime = payload.get("market_regime", "Sideways")
+             confidence = payload.get("confidence", 50.0)
+             symbol = payload.get("symbol", "NIFTY50")
+             
+@@ -506,19 +507,23 @@ class RiskEmployee(BaseNewSpecialist):
+ 
+     async def start(self) -> None:
+         await super().start()
+-        await event_bus.subscribe("safety_status", self._on_safety)
++        # "safety_status" is never published anywhere (SafetyEngine.check_order()
++        # emits "safety_blocked" / "safety_check_passed" per order via SafetyManager).
++        await event_bus.subscribe("safety_blocked", self._on_safety)
++        await event_bus.subscribe("safety_check_passed", self._on_safety)
+ 
+     async def stop(self) -> None:
+         await super().stop()
+-        await event_bus.unsubscribe("safety_status", self._on_safety)
++        await event_bus.unsubscribe("safety_blocked", self._on_safety)
++        await event_bus.unsubscribe("safety_check_passed", self._on_safety)
+ 
+     async def _on_safety(self, event: EventModel) -> None:
+         try:
+             payload = event.payload
+-            blocked = payload.get("is_blocked", False)
+-            symbol = "SYSTEM"
++            blocked = event.event_type == "safety_blocked"
++            symbol = payload.get("order_details", {}).get("symbol", "SYSTEM")
+             rec = "WAIT" if blocked else "BUY"
+-            
++
+             async with self._lock:
+                 self.latest_results[symbol] = {
+                     "recommendation": rec,
+@@ -563,11 +568,12 @@ class CapitalProtectionEmployee(BaseNewSpecialist):
+ 
+     async def start(self) -> None:
+         await super().start()
+-        await event_bus.subscribe("pnl_update", self._on_pnl)
++        # PortfolioEngine publishes "pnl_updated", not "pnl_update".
++        await event_bus.subscribe("pnl_updated", self._on_pnl)
+ 
+     async def stop(self) -> None:
+         await super().stop()
+-        await event_bus.unsubscribe("pnl_update", self._on_pnl)
++        await event_bus.unsubscribe("pnl_updated", self._on_pnl)
+ 
+     async def _on_pnl(self, event: EventModel) -> None:
+         try:
+@@ -761,17 +767,21 @@ class PaperTradingEmployee(BaseNewSpecialist):
+ 
+     async def start(self) -> None:
+         await super().start()
+-        await event_bus.subscribe("paper_status_changed", self._on_paper_status)
++        # "paper_status_changed" is never published; PaperTradingEngine publishes
++        # "paper_trade_started" / "paper_trade_stopped" for session lifecycle.
++        await event_bus.subscribe("paper_trade_started", self._on_paper_status)
++        await event_bus.subscribe("paper_trade_stopped", self._on_paper_status)
+ 
+     async def stop(self) -> None:
+         await super().stop()
+-        await event_bus.unsubscribe("paper_status_changed", self._on_paper_status)
++        await event_bus.unsubscribe("paper_trade_started", self._on_paper_status)
++        await event_bus.unsubscribe("paper_trade_stopped", self._on_paper_status)
+ 
+     async def _on_paper_status(self, event: EventModel) -> None:
+         try:
+-            payload = event.payload
+             symbol = "SYSTEM"
+-            rec = "BUY" if payload.get("is_active", False) else "WAIT"
++            is_active = event.event_type == "paper_trade_started"
++            rec = "BUY" if is_active else "WAIT"
+             async with self._lock:
+                 self.latest_results[symbol] = {
+                     "recommendation": rec,
+diff --git a/spv-quantum-ai/tests/test_new_specialists.py b/spv-quantum-ai/tests/test_new_specialists.py
+index b5d4422..ebf3477 100644
+--- a/spv-quantum-ai/tests/test_new_specialists.py
++++ b/spv-quantum-ai/tests/test_new_specialists.py
+@@ -107,3 +107,121 @@ async def test_vwap_employee_analysis():
+     finally:
+         await employee_engine.stop()
+         await event_bus.stop()
++
++
++@pytest.mark.asyncio
++async def test_risk_employee_reacts_to_real_safety_events():
++    """RiskEmployee used to subscribe to 'safety_status', an event nothing ever
++    publishes (SafetyEngine emits 'safety_blocked' / 'safety_check_passed' per
++    order instead), so it was permanently stuck on its default 'WAIT' decision."""
++    event_bus.start()
++    await employee_engine.start()
++    try:
++        risk_emp = employee_engine.risk_emp
++        assert risk_emp.latest_results == {}
++
++        await event_bus.publish(EventModel(
++            event_type="safety_check_passed",
++            source_agent="safety_engine",
++            payload={"order_details": {"symbol": "RELIANCE"}, "response": {"allowed": True}}
++        ))
++        await asyncio.sleep(0.05)
++        res = risk_emp.latest_results.get("RELIANCE")
++        assert res is not None
++        assert res["recommendation"] == "BUY"
++
++        await event_bus.publish(EventModel(
++            event_type="safety_blocked",
++            source_agent="safety_engine",
++            payload={"order_details": {"symbol": "RELIANCE"}, "response": {"allowed": False}}
++        ))
++        await asyncio.sleep(0.05)
++        res = risk_emp.latest_results.get("RELIANCE")
++        assert res["recommendation"] == "WAIT"
++    finally:
++        await employee_engine.stop()
++        await event_bus.stop()
++
++
++@pytest.mark.asyncio
++async def test_market_regime_employee_reacts_to_real_regime_events():
++    """MarketRegimeEmployee used to subscribe to 'regime_changed' (never published)
++    and read payload['regime'] (wrong key); RegimeEngine actually publishes
++    'market_regime' with the value under 'market_regime'."""
++    event_bus.start()
++    await employee_engine.start()
++    try:
++        regime_emp = employee_engine.market_regime
++        assert regime_emp.latest_results == {}
++
++        await event_bus.publish(EventModel(
++            event_type="market_regime",
++            source_agent="regime_engine",
++            payload={"symbol": "NIFTY50", "market_regime": "TRENDING_BULLISH", "confidence": 80.0}
++        ))
++        await asyncio.sleep(0.05)
++        res = regime_emp.latest_results.get("NIFTY50")
++        assert res is not None
++        assert res["recommendation"] == "TRENDING_BULLISH"
++        assert res["confidence"] == 80.0
++    finally:
++        await employee_engine.stop()
++        await event_bus.stop()
++
++
++@pytest.mark.asyncio
++async def test_capital_protection_employee_reacts_to_real_pnl_events():
++    """CapitalProtectionEmployee used to subscribe to 'pnl_update' (never published);
++    PortfolioEngine actually publishes 'pnl_updated'."""
++    event_bus.start()
++    await employee_engine.start()
++    try:
++        cap_emp = employee_engine.cap_protection
++        assert cap_emp.latest_results == {}
++
++        await event_bus.publish(EventModel(
++            event_type="pnl_updated",
++            source_agent="portfolio_engine",
++            payload={"realized_pnl": 100.0, "unrealized_pnl": 50.0, "mtm": 150.0}
++        ))
++        await asyncio.sleep(0.05)
++        res = cap_emp.latest_results.get("SYSTEM")
++        assert res is not None
++        assert res["recommendation"] == "BUY"
++    finally:
++        await employee_engine.stop()
++        await event_bus.stop()
++
++
++@pytest.mark.asyncio
++async def test_paper_trading_employee_reacts_to_real_session_events():
++    """PaperTradingEmployee used to subscribe to 'paper_status_changed' (never
++    published); PaperTradingEngine actually publishes 'paper_trade_started' and
++    'paper_trade_stopped'."""
++    event_bus.start()
++    await employee_engine.start()
++    try:
++        paper_emp = employee_engine.paper_trading
++        assert paper_emp.latest_results == {}
++
++        await event_bus.publish(EventModel(
++            event_type="paper_trade_started",
++            source_agent="paper_trading_engine",
++            payload={"session_id": "PPS-test"}
++        ))
++        await asyncio.sleep(0.05)
++        res = paper_emp.latest_results.get("SYSTEM")
++        assert res is not None
++        assert res["recommendation"] == "BUY"
++
++        await event_bus.publish(EventModel(
++            event_type="paper_trade_stopped",
++            source_agent="paper_trading_engine",
++            payload={"session_id": "PPS-test"}
++        ))
++        await asyncio.sleep(0.05)
++        res = paper_emp.latest_results.get("SYSTEM")
++        assert res["recommendation"] == "WAIT"
++    finally:
++        await employee_engine.stop()
++        await event_bus.stop()
+-- 
+2.43.0
+

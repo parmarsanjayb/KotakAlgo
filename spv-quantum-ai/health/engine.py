@@ -51,23 +51,9 @@ class SystemHealthEngine:
         self.manager.heartbeat_mgr.record_heartbeat(service)
 
     async def _self_heartbeat_loop(self) -> None:
-        last_telemetry_time = 0.0
         while self._running:
             for svc in self.manager.heartbeat_mgr.registered_services:
                 self.record_heartbeat(svc)
-            
-            now = time.time()
-            if now - last_telemetry_time >= 5.0:
-                last_telemetry_time = now
-                try:
-                    metrics = await self.get_dashboard_metrics()
-                    await event_bus.publish(EventModel(
-                        event_type="system_telemetry",
-                        source_agent="system_health_engine",
-                        payload=metrics
-                    ))
-                except Exception as ex:
-                    logger.error("Failed to publish system telemetry event", error=str(ex))
             await asyncio.sleep(2.0)
 
     async def get_dashboard_metrics(self) -> Dict[str, Any]:

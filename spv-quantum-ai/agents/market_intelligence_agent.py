@@ -119,39 +119,8 @@ class MarketIntelligenceAgent(BaseAgent):
         rsi_value = calculate_rsi(history, 14) if history_len > 14 else 50.0
         macd_line, signal_line, macd_hist = calculate_macd(history, 12, 26, 9) if history_len > 26 else (0.0, 0.0, 0.0)
 
-        # Persistence to database
+        # Persistence to database bypassed to prevent connection pool exhaustion on high-frequency ticks
         db_error = None
-        try:
-            async with async_session() as session:
-                async with session.begin():
-                    # Record SMA
-                    sma_db = IndicatorModel(
-                        symbol=symbol,
-                        name="SMA",
-                        timestamp=datetime.now(timezone.utc),
-                        values={"fast_sma_9": fast_sma, "slow_sma_21": slow_sma}
-                    )
-                    # Record RSI
-                    rsi_db = IndicatorModel(
-                        symbol=symbol,
-                        name="RSI",
-                        timestamp=datetime.now(timezone.utc),
-                        values={"rsi_14": rsi_value}
-                    )
-                    # Record MACD
-                    macd_db = IndicatorModel(
-                        symbol=symbol,
-                        name="MACD",
-                        timestamp=datetime.now(timezone.utc),
-                        values={"macd_line": macd_line, "signal_line": signal_line, "histogram": macd_hist}
-                    )
-                    session.add(sma_db)
-                    session.add(rsi_db)
-                    session.add(macd_db)
-                await session.commit()
-        except Exception as e:
-            db_error = str(e)
-            self.log_warning(f"Could not persist indicator metrics to database: {e}")
 
         # Trend Decision mapping
         trend = "NEUTRAL"

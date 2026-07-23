@@ -70,11 +70,14 @@ def setup_logging() -> None:
     logs_dir = root_dir / "logs"
     logs_dir.mkdir(exist_ok=True)
     
-    # Rotating File Handler for production persistence (10 MB max, 5 backups)
+    # Rotating File Handler for production persistence.
+    # Volume runs ~50 MB/hour during market hours, so 50 MB of retention threw
+    # away the whole session before anyone could look at it. 60 backups ≈ 600 MB
+    # ≈ a full trading day, which is what post-session diagnosis needs.
     file_handler = logging.handlers.RotatingFileHandler(
         logs_dir / "system.log",
         maxBytes=10 * 1024 * 1024,   # 10 MB per file
-        backupCount=5,               # keep 5 rotated files → max 50 MB total
+        backupCount=60,              # keep 60 rotated files → max ~600 MB
         encoding="utf-8",
     )
     file_handler.setFormatter(JSONFormatter())

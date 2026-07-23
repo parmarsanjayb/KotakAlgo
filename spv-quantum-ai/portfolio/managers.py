@@ -8,28 +8,52 @@ logger = get_logger("portfolio_managers")
 
 class PositionManager:
     """
-    Manages all open and closed positions.
+    Manages all open and closed positions for all SaaS tenants.
     Maintains average prices, net quantities, and states.
     """
     def __init__(self) -> None:
-        self._positions: Dict[str, Position] = {}
+        self._positions: Dict[str, Dict[str, Position]] = {}  # user_id -> { symbol -> Position }
         self._lock = asyncio.Lock()
 
-    async def update_on_fill(self, fill_symbol: str, fill_side: str, fill_qty: float, fill_price: float) -> tuple[Optional[Position], str]:
+    def _get_user_positions(self, user_id: str) -> Dict[str, Position]:
+        # Handle backward-compatibility: if the dictionary was populated flatly by a test
+        flat_positions = {}
+        for k, v in list(self._positions.items()):
+            if isinstance(v, Position):
+                flat_positions[k] = v
+                
+        if flat_positions:
+            # Move flat positions to the default "admin" user
+            if "admin" not in self._positions:
+                self._positions["admin"] = {}
+            for k, v in flat_positions.items():
+                self._positions["admin"][k] = v
+                del self._positions[k]
+
+        if user_id not in self._positions:
+            self._positions[user_id] = {}
+        return self._positions[user_id]
+
+    async def update_on_fill(self, fill_symbol: str, fill_side: str, fill_qty: float, fill_price: float, user_id: str = "admin") -> tuple[Optional[Position], str]:
         """
-        Updates average price and quantity based on trade fill details.
+        Updates average price and quantity based on trade fill details for a specific user.
         Returns: (updated_position, action_type) where action_type can be "OPENED", "UPDATED", "CLOSED", or "NONE"
         """
+        from portfolio.trade_log import record_closed_trade, resolve_segment
+
+        # Filled in whenever this fill books realised P&L; written to the
+        # database after the lock is released so accounting never holds up
+        # order handling.
+        closed_record: Optional[dict] = None
+
         async with self._lock:
-            pos = self._positions.get(fill_symbol)
+            user_pos = self._get_user_positions(user_id)
+            pos = user_pos.get(fill_symbol)
             action = "NONE"
-            
-            # Helper to resolve segment
-            segment = "Equity"
-            if fill_symbol.endswith("FUT") or "FUT" in fill_symbol:
-                segment = "Futures"
-            elif any(x in fill_symbol for x in ["CE", "PE", "OPT"]):
-                segment = "Options"
+
+            # Shared classifier — a plain "CE"/"PE"/"FUT" match filed CRUDEOIL
+            # and ZINC under Equity, which made the segment breakdown wrong.
+            segment = resolve_segment(fill_symbol)
 
             if not pos or pos.state == PositionState.CLOSED:
                 # Open new position
@@ -40,9 +64,10 @@ class PositionManager:
                     quantity=fill_qty,
                     avg_price=fill_price,
                     ltp=fill_price,
-                    state=PositionState.OPEN
+                    state=PositionState.OPEN,
+                    user_id=user_id
                 )
-                self._positions[fill_symbol] = pos
+                user_pos[fill_symbol] = pos
                 action = "OPENED"
             else:
                 # Update existing position
@@ -66,7 +91,12 @@ class PositionManager:
                         # Realized PNL calculation: entry vs exit
                         trade_realized = (fill_price - pos.avg_price) * fill_qty if curr_side == "BUY" else (pos.avg_price - fill_price) * fill_qty
                         pos.realized_pnl += trade_realized
-                        
+                        closed_record = dict(
+                            symbol=fill_symbol, side=curr_side, quantity=fill_qty,
+                            entry_price=pos.avg_price, exit_price=fill_price,
+                            pnl=trade_realized, user_id=user_id, opened_at=pos.created_at,
+                        )
+
                         pos.quantity -= fill_qty
                         pos.state = PositionState.PARTIAL
                         pos.updated_at = datetime.now(timezone.utc)
@@ -75,7 +105,12 @@ class PositionManager:
                         # Full close
                         trade_realized = (fill_price - pos.avg_price) * fill_qty if curr_side == "BUY" else (pos.avg_price - fill_price) * fill_qty
                         pos.realized_pnl += trade_realized
-                        
+                        closed_record = dict(
+                            symbol=fill_symbol, side=curr_side, quantity=fill_qty,
+                            entry_price=pos.avg_price, exit_price=fill_price,
+                            pnl=trade_realized, user_id=user_id, opened_at=pos.created_at,
+                        )
+
                         pos.quantity = 0.0
                         pos.state = PositionState.CLOSED
                         pos.updated_at = datetime.now(timezone.utc)
@@ -84,7 +119,12 @@ class PositionManager:
                         # Reversal (position flipped buy -> sell or vice-versa)
                         trade_realized = (fill_price - pos.avg_price) * pos.quantity if curr_side == "BUY" else (pos.avg_price - fill_price) * pos.quantity
                         pos.realized_pnl += trade_realized
-                        
+                        closed_record = dict(
+                            symbol=fill_symbol, side=curr_side, quantity=pos.quantity,
+                            entry_price=pos.avg_price, exit_price=fill_price,
+                            pnl=trade_realized, user_id=user_id, opened_at=pos.created_at,
+                        )
+
                         remaining_qty = fill_qty - pos.quantity
                         pos.side = new_side
                         pos.quantity = remaining_qty
@@ -93,33 +133,42 @@ class PositionManager:
                         pos.updated_at = datetime.now(timezone.utc)
                         action = "OPENED"
 
-            return pos, action
+        if closed_record is not None:
+            await record_closed_trade(**closed_record)
 
-    async def update_ltp(self, symbol: str, ltp: float) -> Optional[Position]:
-        async with self._lock:
-            pos = self._positions.get(symbol)
-            if pos and pos.state != PositionState.CLOSED:
-                pos.ltp = ltp
-                # Recalculate unrealized PNL
-                if pos.side.upper() == "BUY":
-                    pos.unrealized_pnl = (ltp - pos.avg_price) * pos.quantity
-                else:
-                    pos.unrealized_pnl = (pos.avg_price - ltp) * pos.quantity
-                pos.updated_at = datetime.now(timezone.utc)
-                return pos
-            return None
+        return pos, action
 
-    async def get_all_positions(self) -> List[Position]:
+    async def update_ltp(self, symbol: str, ltp: float) -> List[Position]:
+        """Updates LTP for all users currently holding the given symbol."""
         async with self._lock:
-            return list(self._positions.values())
+            updated_positions = []
+            for user_id, user_pos in self._positions.items():
+                pos = user_pos.get(symbol)
+                if pos and pos.state != PositionState.CLOSED:
+                    pos.ltp = ltp
+                    # Recalculate unrealized PNL
+                    if pos.side.upper() == "BUY":
+                        pos.unrealized_pnl = (ltp - pos.avg_price) * pos.quantity
+                    else:
+                        pos.unrealized_pnl = (pos.avg_price - ltp) * pos.quantity
+                    pos.updated_at = datetime.now(timezone.utc)
+                    updated_positions.append(pos)
+            return updated_positions
 
-    async def get_open_positions(self) -> List[Position]:
+    async def get_all_positions(self, user_id: str = "admin") -> List[Position]:
         async with self._lock:
-            return [p for p in self._positions.values() if p.state in (PositionState.OPEN, PositionState.PARTIAL)]
+            user_pos = self._get_user_positions(user_id)
+            return list(user_pos.values())
 
-    async def get_closed_positions(self) -> List[Position]:
+    async def get_open_positions(self, user_id: str = "admin") -> List[Position]:
         async with self._lock:
-            return [p for p in self._positions.values() if p.state == PositionState.CLOSED]
+            user_pos = self._get_user_positions(user_id)
+            return [p for p in user_pos.values() if p.state in (PositionState.OPEN, PositionState.PARTIAL)]
+
+    async def get_closed_positions(self, user_id: str = "admin") -> List[Position]:
+        async with self._lock:
+            user_pos = self._get_user_positions(user_id)
+            return [p for p in user_pos.values() if p.state == PositionState.CLOSED]
 
 
 class PnLManager:

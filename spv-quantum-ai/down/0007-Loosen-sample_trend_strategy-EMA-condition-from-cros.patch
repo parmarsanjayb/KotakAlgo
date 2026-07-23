@@ -1,0 +1,39 @@
+From 3bd2fea59442ba8159944b08b8712da526e08976 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 16:52:56 +0000
+Subject: [PATCH 7/7] Loosen sample_trend_strategy EMA condition from
+ crosses_above to state check
+
+Confidence scoring's strategy_match component was permanently stuck at its
+unmatched floor because sample_trend_strategy required EMA_9 crosses_above
+EMA_20 (the exact one-bar transition) at the same instant market_regime ==
+TRENDING_BULLISH. RegimeEngine's TRENDING_BULLISH classification itself
+requires EMA_9 > EMA_20 > EMA_50 to already hold, so by the time regime
+confirms a trend, the crossover has almost always already happened on an
+earlier bar - the two conditions rarely coincide. Changed the condition to
+EMA_9 > EMA_20 (a sustained-state check consistent with standard trend-
+following entries) so it's satisfied whenever regime is already trending,
+rather than only in the single bar the crossover occurs.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/config/strategies/sample_trend_strategy.yaml | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/spv-quantum-ai/config/strategies/sample_trend_strategy.yaml b/spv-quantum-ai/config/strategies/sample_trend_strategy.yaml
+index 7fb1046..45d2073 100644
+--- a/spv-quantum-ai/config/strategies/sample_trend_strategy.yaml
++++ b/spv-quantum-ai/config/strategies/sample_trend_strategy.yaml
+@@ -9,7 +9,7 @@ name: sample_trend_strategy
+ rules:
+   conditions:
+   - key: EMA_9
+-    operator: crosses_above
++    operator: '>'
+     source: indicator
+     target: EMA_20
+   - key: RSI
+-- 
+2.43.0
+

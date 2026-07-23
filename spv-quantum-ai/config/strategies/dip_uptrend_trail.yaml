@@ -1,0 +1,40 @@
+name: dip_uptrend_trail
+description: >-
+  Buy-the-dip in an uptrend, then RIDE the trend (no fixed target) and exit only
+  when the trend breaks — price closes below its 20-day SMA. This is the
+  trend-ride / trailing-style exit: profit is not capped, the position is held
+  as long as the uptrend holds. Verified on 2 years of NSE daily data:
+  out-of-sample profit factor 2.13, positive in both regimes, ~ multi-week hold.
+enabled: true
+version: 1.0.0
+rules:
+  operator: AND
+  conditions:
+  - key: ROC_1
+    operator: '<'
+    source: indicator
+    value: -3.0
+  - key: CLOSE
+    operator: '>'
+    source: indicator
+    target: SMA_50
+exit_rules:
+  operator: AND
+  conditions:
+  - key: CLOSE
+    operator: '<'
+    source: indicator
+    target: SMA_20
+actions:
+  matched:
+    action: SIGNAL_BUY
+    confidence: 80.0
+    reason: >-
+      Dropped >=3% intraday but holding above the 50-day SMA — a dip inside an
+      uptrend. Enter and ride the trend (verified edge, OOS profit factor 2.13).
+  exit:
+    action: SIGNAL_SELL
+    confidence: 78.0
+    reason: >-
+      Price closed below its 20-day SMA — the uptrend has broken. Exit and lock
+      the ridden profit (trend-ride / trailing-style exit, no fixed target).

@@ -30,7 +30,8 @@ class StrategyEngine:
         self.loader = StrategyLoader(self.registry, directory)
         self.evaluator = RuleEngine()
         self._running = False
-        
+        self._db_loaded_names: set = set()
+
         # Load strategies on startup
         self.loader.load_all()
 
@@ -38,26 +39,52 @@ class StrategyEngine:
         if self._running:
             return
         self._running = True
+        await self.load_from_db()
         await event_bus.subscribe("candle", self._on_candle_event)
-        await event_bus.subscribe("scanner_match", self._on_scanner_match)
-        logger.info("StrategyEngine started and subscribed to candle and scanner_match events.")
+        logger.info("StrategyEngine started and subscribed to candle events.")
+
+    async def load_from_db(self) -> None:
+        """
+        Registers every Strategy Studio strategy's active version into the
+        same registry YAML-file strategies use. Studio-authored strategies
+        are evaluated by the identical rule engine — the Studio is purely
+        an authoring/persistence layer, not a separate execution path. Safe
+        to call again any time the Studio saves/activates/deletes a
+        strategy, to hot-reload without a restart.
+        """
+        from database.models import StrategyDefinitionModel
+        from database.connection import async_session
+        from sqlalchemy import select
+
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(StrategyDefinitionModel).where(StrategyDefinitionModel.is_active == True)  # noqa: E712
+                )
+                rows = result.scalars().all()
+        except Exception as e:
+            logger.error("Failed to load Strategy Studio strategies from DB", error=str(e))
+            return
+
+        # Drop any previously DB-loaded strategies that are no longer active
+        # (deleted or deactivated), without touching YAML-loaded strategies.
+        db_names_now = {row.strategy_name for row in rows}
+        for name in list(self.registry._strategies.keys()):
+            if name in self._db_loaded_names and name not in db_names_now:
+                self.registry.unregister(name)
+
+        self._db_loaded_names = db_names_now
+        for row in rows:
+            try:
+                strategy = Strategy(**row.definition)
+                self.registry.register(strategy)
+            except Exception as e:
+                logger.error(f"Failed to register Studio strategy '{row.strategy_name}'", error=str(e))
 
     async def stop(self) -> None:
         self._running = False
         await event_bus.unsubscribe("candle", self._on_candle_event)
-        await event_bus.unsubscribe("scanner_match", self._on_scanner_match)
         logger.info("StrategyEngine stopped.")
-
-    async def _on_scanner_match(self, event: EventModel) -> None:
-        try:
-            payload = event.payload
-            scan_result = payload.get("scan_result", payload)
-            symbol = scan_result.get("symbol")
-            if not symbol:
-                return
-            await self.evaluate_all(symbol, Timeframe.M1)
-        except Exception as e:
-            logger.error("Error processing scanner_match event in StrategyEngine", error=str(e))
 
     async def _on_candle_event(self, event: EventModel) -> None:
         try:
@@ -69,7 +96,7 @@ class StrategyEngine:
         except Exception as e:
             logger.error("Error processing candle event in StrategyEngine", error=str(e))
 
-    async def evaluate_all(self, symbol: str, timeframe: Timeframe, publish_events: bool = True) -> List[StrategyResponse]:
+    async def evaluate_all(self, symbol: str, timeframe: Timeframe) -> List[StrategyResponse]:
         """
         Builds the context for symbol/timeframe and evaluates all active strategies.
         """
@@ -80,11 +107,19 @@ class StrategyEngine:
         for strategy in active_strategies:
             try:
                 matched = self.evaluator.evaluate_group(strategy.rules, context)
-                
+
+                # Entry and exit conditions are designed to be mutually
+                # exclusive (e.g. Golden Cross vs Death Cross), so exit_rules
+                # is only checked when the entry side didn't match — this
+                # avoids either side needing to know about the other.
+                exit_matched = False
+                if not matched and strategy.exit_rules is not None:
+                    exit_matched = self.evaluator.evaluate_group(strategy.exit_rules, context)
+
                 status_str = "ACTIVE" if strategy.enabled else "DISABLED"
-                
-                if matched:
-                    action_info = strategy.actions.get("matched", {})
+
+                if matched or exit_matched:
+                    action_info = strategy.actions.get("exit" if exit_matched else "matched", {})
                     resp = StrategyResponse(
                         strategy_name=strategy.name,
                         version=strategy.version,
@@ -95,20 +130,17 @@ class StrategyEngine:
                         required_action=action_info.get("action", "SIGNAL_NONE")
                     )
                     responses.append(resp)
-                    
+
                     # Publish Matched event
-                    if publish_events:
-                        evt = StrategyMatchedEvent(
-                            symbol=symbol,
-                            timeframe=timeframe.value if hasattr(timeframe, "value") else str(timeframe),
-                            strategy_response=resp,
-                            context=context.get("current", {})
-                        )
-                        await event_bus.publish(EventModel(
-                            event_type="strategy_matched",
-                            source_agent="strategy_engine",
-                            payload=evt.model_dump()
-                        ))
+                    evt = StrategyMatchedEvent(
+                        strategy_response=resp,
+                        context=context.get("current", {})
+                    )
+                    await event_bus.publish(EventModel(
+                        event_type="strategy_matched",
+                        source_agent="strategy_engine",
+                        payload=evt.model_dump()
+                    ))
                 else:
                     resp = StrategyResponse(
                         strategy_name=strategy.name,
@@ -122,18 +154,15 @@ class StrategyEngine:
                     responses.append(resp)
                     
                     # Publish Rejected event
-                    if publish_events:
-                        evt = StrategyRejectedEvent(
-                            symbol=symbol,
-                            timeframe=timeframe.value if hasattr(timeframe, "value") else str(timeframe),
-                            strategy_response=resp,
-                            context=context.get("current", {})
-                        )
-                        await event_bus.publish(EventModel(
-                            event_type="strategy_rejected",
-                            source_agent="strategy_engine",
-                            payload=evt.model_dump()
-                        ))
+                    evt = StrategyRejectedEvent(
+                        strategy_response=resp,
+                        context=context.get("current", {})
+                    )
+                    await event_bus.publish(EventModel(
+                        event_type="strategy_rejected",
+                        source_agent="strategy_engine",
+                        payload=evt.model_dump()
+                    ))
             except Exception as e:
                 logger.error(f"Failed to evaluate strategy {strategy.name}", error=str(e))
 

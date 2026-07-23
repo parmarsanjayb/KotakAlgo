@@ -95,6 +95,7 @@ class BaseBroker(ABC):
         price:         Optional[float] = None,
         trigger_price: Optional[float] = None,
         tag:           Optional[str] = None,
+        **kwargs:      Any,
     ) -> BrokerResponse:
         """Submit a new order. Returns BrokerResponse with Order in data."""
         ...

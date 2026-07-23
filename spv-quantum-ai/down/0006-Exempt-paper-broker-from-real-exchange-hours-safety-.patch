@@ -1,0 +1,139 @@
+From 50c9a8cf0ad130170248b94771d47289d48915dc Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 16:40:12 +0000
+Subject: [PATCH 6/7] Exempt paper broker from real-exchange-hours safety
+ guards
+
+TradingGuard.check_session/check_holiday/check_market_closing model NSE's
+real trading calendar (09:15-15:30 IST, closed weekends). That's correct
+for a live broker, but paper trading runs on a mock feed that ticks
+continuously and is meant to be exercised anytime for testing - with real
+exchange hours enforced, no automatic paper trade could ever complete
+outside actual NSE market hours.
+
+Added TradingGuard._is_paper_broker_active() and short-circuit all three
+guards to allow when the active broker is paper_broker; live/real brokers
+remain fully gated by real IST market hours as before.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/safety/guard.py             | 17 ++++++++--
+ spv-quantum-ai/tests/test_safety_engine.py | 36 ++++++++++++++++++++--
+ 2 files changed, 48 insertions(+), 5 deletions(-)
+
+diff --git a/spv-quantum-ai/safety/guard.py b/spv-quantum-ai/safety/guard.py
+index 2f85161..e24d390 100644
+--- a/spv-quantum-ai/safety/guard.py
++++ b/spv-quantum-ai/safety/guard.py
+@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
+ from typing import Dict, Any, Tuple, Optional
+ from core.logging import get_logger
+ from brokers import broker_engine
++from brokers.manager import broker_manager
+ 
+ logger = get_logger("trading_guard")
+ 
+@@ -23,6 +24,16 @@ class TradingGuard:
+         self.consecutive_losses = 0
+         self.consecutive_wins = 0
+ 
++    def _is_paper_broker_active(self) -> bool:
++        """Real-exchange-hours guards (session/holiday/market-closing) model NSE's
++        actual trading calendar, which is meaningless for the paper broker's mock
++        feed - paper trading is meant to be exercised anytime, not just 09:15-15:30
++        IST on NSE trading days. Live/real brokers remain fully gated."""
++        try:
++            return broker_manager.get_active().name == "paper_broker"
++        except Exception:
++            return False
++
+     async def check_all(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
+         """Runs all safety check functions in sequence."""
+         checks = [
+@@ -47,7 +58,7 @@ class TradingGuard:
+         return True, "Passed all safety checks."
+ 
+     async def check_session(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
+-        if not self.config.get("trading_session_guard", True):
++        if not self.config.get("trading_session_guard", True) or self._is_paper_broker_active():
+             return True, ""
+         now = datetime.now(timezone.utc).astimezone(IST).time()
+         start = dt_time(9, 15)
+@@ -57,7 +68,7 @@ class TradingGuard:
+         return True, ""
+ 
+     async def check_holiday(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
+-        if not self.config.get("holiday_guard", True):
++        if not self.config.get("holiday_guard", True) or self._is_paper_broker_active():
+             return True, ""
+         # Simulate simple holiday schedule (Saturday, Sunday)
+         today = datetime.now(timezone.utc).astimezone(IST).weekday()
+@@ -66,7 +77,7 @@ class TradingGuard:
+         return True, ""
+ 
+     async def check_market_closing(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
+-        if not self.config.get("market_closing_guard", True):
++        if not self.config.get("market_closing_guard", True) or self._is_paper_broker_active():
+             return True, ""
+         now = datetime.now(timezone.utc).astimezone(IST)
+         # Market closes at 15:30. Check if we are within 15 minutes of close
+diff --git a/spv-quantum-ai/tests/test_safety_engine.py b/spv-quantum-ai/tests/test_safety_engine.py
+index d2c598f..c57b697 100644
+--- a/spv-quantum-ai/tests/test_safety_engine.py
++++ b/spv-quantum-ai/tests/test_safety_engine.py
+@@ -138,13 +138,20 @@ async def test_trading_guard_session_check_uses_ist_not_server_local_time():
+     used to call .astimezone() with no timezone argument, which resolves to the
+     server/container's local timezone (UTC in this environment, or anything else
+     depending on deployment) instead of India Standard Time - so on a UTC server,
+-    trades were spuriously allowed/blocked based on the wrong clock entirely."""
++    trades were spuriously allowed/blocked based on the wrong clock entirely.
++    Real-exchange-hours guards only apply to non-paper (live) brokers - the paper
++    broker's mock feed runs continuously and is exempt (see next test)."""
+     from datetime import datetime, timezone as tz, time as dt_time
++    from unittest.mock import patch, MagicMock
+     from zoneinfo import ZoneInfo
+     from safety.guard import TradingGuard
+ 
+     guard = TradingGuard({"trading_session_guard": True})
+-    allowed, reason = await guard.check_session({"symbol": "INFY"})
++
++    fake_broker = MagicMock()
++    fake_broker.name = "kotak_neo"
++    with patch("safety.guard.broker_manager.get_active", return_value=fake_broker):
++        allowed, reason = await guard.check_session({"symbol": "INFY"})
+ 
+     ist_now = datetime.now(tz.utc).astimezone(ZoneInfo("Asia/Kolkata")).time()
+     expected_allowed = dt_time(9, 15) <= ist_now <= dt_time(15, 30)
+@@ -152,3 +159,28 @@ async def test_trading_guard_session_check_uses_ist_not_server_local_time():
+     assert allowed == expected_allowed
+     if not expected_allowed:
+         assert "outside allowed window" in reason
++
++
++@pytest.mark.asyncio
++async def test_trading_guard_session_check_bypassed_for_paper_broker():
++    """Real-exchange-hours guards (session/holiday/market-closing) model NSE's
++    actual trading calendar, which doesn't apply to the paper broker's mock feed -
++    paper trading must be exercisable anytime, not just during real NSE hours."""
++    from unittest.mock import patch, MagicMock
++    from safety.guard import TradingGuard
++
++    guard = TradingGuard({
++        "trading_session_guard": True,
++        "holiday_guard": True,
++        "market_closing_guard": True,
++    })
++
++    fake_broker = MagicMock()
++    fake_broker.name = "paper_broker"
++    with patch("safety.guard.broker_manager.get_active", return_value=fake_broker):
++        allowed, _ = await guard.check_session({"symbol": "INFY"})
++        assert allowed is True
++        allowed, _ = await guard.check_holiday({"symbol": "INFY"})
++        assert allowed is True
++        allowed, _ = await guard.check_market_closing({"symbol": "INFY"})
++        assert allowed is True
+-- 
+2.43.0
+

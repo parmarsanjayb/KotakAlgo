@@ -1,0 +1,302 @@
+{
+    "ADANIENT": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "ADANIPORTS": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "APOLLOHOSP": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "ASIANPAINT": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "AXISBANK": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "BAJAJ-AUTO": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "BAJAJFINSV": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "BAJFINANCE": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "BHARTIARTL": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "BPCL": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "BRITANNIA": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "CIPLA": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "COALINDIA": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "DIVISLAB": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "DRREDDY": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "EICHERMOT": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "GRASIM": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "HCLTECH": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "HDFCBANK": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "HDFCLIFE": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "HEROMOTOCO": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "HINDALCO": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "HINDUNILVR": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "ICICIBANK": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "INDUSINDBK": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "INFY": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "ITC": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "JSWSTEEL": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "KOTAKBANK": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "LT": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "LTIM": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "M&M": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "MARUTI": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "NESTLEIND": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "NTPC": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "ONGC": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "POWERGRID": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "RELIANCE": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "SBILIFE": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "SBIN": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "SHRIRAMFIN": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "SUNPHARMA": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "TATACONSUM": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "TATAMOTORS": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "TATASTEEL": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "TCS": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "TECHM": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "TITAN": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "ULTRACEMCO": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    },
+    "WIPRO": {
+        "exchange": "NSE",
+        "segment": "EQUITY",
+        "lot_size": 1,
+        "tick_size": 0.05
+    }
+}

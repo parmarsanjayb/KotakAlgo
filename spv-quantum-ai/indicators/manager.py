@@ -80,6 +80,8 @@ class IndicatorManager:
             self._pub_stoch_rsi(symbol, tf, closes),
             self._pub_cci(symbol, tf, highs, lows, closes),
             self._pub_roc(symbol, tf, closes),
+            self._pub_roc1(symbol, tf, closes),
+            self._pub_close(symbol, tf, closes),
             self._pub_momentum(symbol, tf, closes),
             self._pub_pivot(symbol, tf, highs, lows, closes),
             self._pub_sr(symbol, tf, highs, lows),
@@ -164,6 +166,16 @@ class IndicatorManager:
         t0 = time.perf_counter()
         v  = calc_roc(closes, 12)
         await self._emit("ROC", sym, tf, v, {"period": 12}, t0)
+
+    async def _pub_roc1(self, sym, tf, closes):
+        t0 = time.perf_counter()
+        v  = calc_roc(closes, 1)          # 1-day % change vs previous close
+        await self._emit("ROC_1", sym, tf, v, {"period": 1}, t0)
+
+    async def _pub_close(self, sym, tf, closes):
+        t0 = time.perf_counter()
+        v  = round(closes[-1], 4) if closes else 0.0
+        await self._emit("CLOSE", sym, tf, v, {}, t0)
 
     async def _pub_momentum(self, sym, tf, closes):
         t0 = time.perf_counter()

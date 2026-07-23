@@ -1,0 +1,254 @@
+From 8afea8a9f540408af6a348427700f37eec92eecb Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 14:36:28 +0000
+Subject: [PATCH 3/7] Show live prices for all market segments and fix broken
+ WebSocket price stream
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Requested: show current prices for every segment in the trading terminal
+(Index through Commodity) plus Top Gainers/Losers.
+
+- market/registry.py, market/instrument.py, market/websocket.py: expand the
+  default instrument universe from 4 symbols (NIFTY50, BANKNIFTY, BTCUSD,
+  ETHUSD) to 17, spanning Index (NIFTY50, BANKNIFTY, FINNIFTY), Equity
+  (RELIANCE, TCS, HDFCBANK, INFY, ICICIBANK, SBIN, ITC), Currency (USDINR),
+  Commodity (CRUDEOIL, GOLD, SILVER, NATURALGAS), and Crypto (BTCUSD, ETHUSD).
+  The mock feed, symbol registry, and instrument manager all read from the
+  same symbol set, so scanners/indicators/regime pick these up automatically.
+
+While verifying this live in a browser, found the actual reason the terminal
+showed no prices at all: dashboard/main.py's ConnectionManager.broadcast()
+passed event payloads straight to WebSocket.send_json(), which uses the
+stdlib json encoder. Every real event payload (ticks, candles, decisions,
+trades) carries nested datetime/Enum values from Pydantic's .model_dump(),
+which that encoder can't serialize — so every broadcast raised inside the
+bare except, silently dropped the connection from the active list, and the
+client just hung with an open socket that never received anything. Fixed by
+running payloads through fastapi.encoders.jsonable_encoder() before sending.
+Also fixed dashboard/static/js/app.js's handleBusEvent, which passed the
+outer {event_id, tick} envelope to updatePriceWidget() instead of unwrapping
+tick first.
+
+Verified live: all 17 symbols now stream prices in the terminal and Top
+Gainers/Top Losers populate correctly. Added a regression test
+(test_websocket_broadcast_serializes_nested_datetime) that fails without the
+jsonable_encoder fix (times out, matching the real symptom) and passes with it.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/dashboard/main.py          |  9 +++--
+ spv-quantum-ai/dashboard/static/js/app.js |  2 +-
+ spv-quantum-ai/market/instrument.py       | 26 +++++++++++---
+ spv-quantum-ai/market/registry.py         | 30 ++++++++++++----
+ spv-quantum-ai/market/websocket.py        | 16 +++++++--
+ spv-quantum-ai/tests/test_websocket.py    | 43 ++++++++++++++++++++++-
+ 6 files changed, 110 insertions(+), 16 deletions(-)
+
+diff --git a/spv-quantum-ai/dashboard/main.py b/spv-quantum-ai/dashboard/main.py
+index 5d450e5..8677236 100644
+--- a/spv-quantum-ai/dashboard/main.py
++++ b/spv-quantum-ai/dashboard/main.py
+@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
+ from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException, Request
+ from fastapi.staticfiles import StaticFiles
+ from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
++from fastapi.encoders import jsonable_encoder
+ from pydantic import BaseModel
+ from sqlalchemy import select, desc
+ from sqlalchemy.ext.asyncio import AsyncSession
+@@ -42,10 +43,14 @@ class ConnectionManager:
+         """Publishes payload to all registered sockets."""
+         async with self._lock:
+             connections = list(self.active_connections)
+-        
++
++        # Event payloads carry raw datetime/Enum values (from Pydantic .model_dump()),
++        # which the stdlib json encoder used by WebSocket.send_json() cannot serialize.
++        encoded = jsonable_encoder(message)
++
+         for connection in connections:
+             try:
+-                await connection.send_json(message)
++                await connection.send_json(encoded)
+             except Exception:
+                 # Silently handle dead connection removals
+                 async with self._lock:
+diff --git a/spv-quantum-ai/dashboard/static/js/app.js b/spv-quantum-ai/dashboard/static/js/app.js
+index 477b217..44497d4 100644
+--- a/spv-quantum-ai/dashboard/static/js/app.js
++++ b/spv-quantum-ai/dashboard/static/js/app.js
+@@ -101,7 +101,7 @@ document.addEventListener("DOMContentLoaded", () => {
+ 
+         // Live prices
+         if (topic === "market_data" || topic === "tick") {
+-            updatePriceWidget(data);
++            updatePriceWidget(data.tick || data);
+         } else if (topic === "order_filled" || topic === "paper_order_filled") {
+             refreshTables();
+             fetchEmployeeData();
+diff --git a/spv-quantum-ai/market/instrument.py b/spv-quantum-ai/market/instrument.py
+index 8deb754..88e91d6 100644
+--- a/spv-quantum-ai/market/instrument.py
++++ b/spv-quantum-ai/market/instrument.py
+@@ -8,10 +8,28 @@ class InstrumentManager:
+ 
+     def __init__(self) -> None:
+         self._instruments: Dict[str, Dict[str, Any]] = {
+-            "NIFTY50":   {"token": "26000", "exchange": "NSE", "segment": "nse_cm",  "lot_size": 50,  "tick_size": 0.05, "precision": 2},
+-            "BANKNIFTY": {"token": "26009", "exchange": "NSE", "segment": "nse_cm",  "lot_size": 15,  "tick_size": 0.05, "precision": 2},
+-            "BTCUSD":    {"token": "btc",   "exchange": "CRYPTO", "segment": "spot", "lot_size": 1,   "tick_size": 0.01, "precision": 2},
+-            "ETHUSD":    {"token": "eth",   "exchange": "CRYPTO", "segment": "spot", "lot_size": 1,   "tick_size": 0.01, "precision": 2},
++            # Index
++            "NIFTY50":    {"token": "26000", "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 50,   "tick_size": 0.05,   "precision": 2},
++            "BANKNIFTY":  {"token": "26009", "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 15,   "tick_size": 0.05,   "precision": 2},
++            "FINNIFTY":   {"token": "26037", "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 40,   "tick_size": 0.05,   "precision": 2},
++            # Equity
++            "RELIANCE":   {"token": "2885",  "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            "TCS":        {"token": "11536", "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            "HDFCBANK":   {"token": "1333",  "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            "INFY":       {"token": "1594",  "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            "ICICIBANK":  {"token": "4963",  "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            "SBIN":       {"token": "3045",  "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            "ITC":        {"token": "1660",  "exchange": "NSE",    "segment": "nse_cm",  "lot_size": 1,    "tick_size": 0.05,   "precision": 2},
++            # Currency
++            "USDINR":     {"token": "usdinr","exchange": "CDS",    "segment": "cd_fo",   "lot_size": 1000, "tick_size": 0.0025, "precision": 4},
++            # Commodity
++            "CRUDEOIL":   {"token": "crudeoil", "exchange": "MCX", "segment": "mcx_fo",  "lot_size": 100,  "tick_size": 1.0,    "precision": 2},
++            "GOLD":       {"token": "gold",  "exchange": "MCX",    "segment": "mcx_fo",  "lot_size": 100,  "tick_size": 1.0,    "precision": 2},
++            "SILVER":     {"token": "silver","exchange": "MCX",    "segment": "mcx_fo",  "lot_size": 30,   "tick_size": 1.0,    "precision": 2},
++            "NATURALGAS": {"token": "natgas","exchange": "MCX",    "segment": "mcx_fo",  "lot_size": 1250, "tick_size": 0.1,    "precision": 2},
++            # Crypto
++            "BTCUSD":     {"token": "btc",   "exchange": "CRYPTO", "segment": "spot",    "lot_size": 1,    "tick_size": 0.01,   "precision": 2},
++            "ETHUSD":     {"token": "eth",   "exchange": "CRYPTO", "segment": "spot",    "lot_size": 1,    "tick_size": 0.01,   "precision": 2},
+         }
+ 
+     def register(
+diff --git a/spv-quantum-ai/market/registry.py b/spv-quantum-ai/market/registry.py
+index 79e1add..5804d55 100644
+--- a/spv-quantum-ai/market/registry.py
++++ b/spv-quantum-ai/market/registry.py
+@@ -7,14 +7,32 @@ class SymbolRegistry:
+     """
+ 
+     def __init__(self) -> None:
+-        # Default universe
+-        self._symbols: Set[str] = {"NIFTY50", "BANKNIFTY", "BTCUSD", "ETHUSD"}
++        # Default universe — spans Index, Equity, Currency, Commodity, and Crypto segments
+         self._meta: Dict[str, Dict[str, Any]] = {
+-            "NIFTY50":    {"exchange": "NSE", "segment": "INDEX", "lot_size": 50,  "tick_size": 0.05},
+-            "BANKNIFTY":  {"exchange": "NSE", "segment": "INDEX", "lot_size": 15,  "tick_size": 0.05},
+-            "BTCUSD":     {"exchange": "CRYPTO", "segment": "SPOT", "lot_size": 1, "tick_size": 0.01},
+-            "ETHUSD":     {"exchange": "CRYPTO", "segment": "SPOT", "lot_size": 1, "tick_size": 0.01},
++            # Index
++            "NIFTY50":    {"exchange": "NSE",  "segment": "INDEX",     "lot_size": 50,   "tick_size": 0.05},
++            "BANKNIFTY":  {"exchange": "NSE",  "segment": "INDEX",     "lot_size": 15,   "tick_size": 0.05},
++            "FINNIFTY":   {"exchange": "NSE",  "segment": "INDEX",     "lot_size": 40,   "tick_size": 0.05},
++            # Equity
++            "RELIANCE":   {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            "TCS":        {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            "HDFCBANK":   {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            "INFY":       {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            "ICICIBANK":  {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            "SBIN":       {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            "ITC":        {"exchange": "NSE",  "segment": "EQUITY",    "lot_size": 1,    "tick_size": 0.05},
++            # Currency
++            "USDINR":     {"exchange": "CDS",  "segment": "CURRENCY",  "lot_size": 1000, "tick_size": 0.0025},
++            # Commodity
++            "CRUDEOIL":   {"exchange": "MCX",  "segment": "COMMODITY", "lot_size": 100,  "tick_size": 1.0},
++            "GOLD":       {"exchange": "MCX",  "segment": "COMMODITY", "lot_size": 100,  "tick_size": 1.0},
++            "SILVER":     {"exchange": "MCX",  "segment": "COMMODITY", "lot_size": 30,   "tick_size": 1.0},
++            "NATURALGAS": {"exchange": "MCX",  "segment": "COMMODITY", "lot_size": 1250, "tick_size": 0.1},
++            # Crypto
++            "BTCUSD":     {"exchange": "CRYPTO", "segment": "SPOT",    "lot_size": 1,    "tick_size": 0.01},
++            "ETHUSD":     {"exchange": "CRYPTO", "segment": "SPOT",    "lot_size": 1,    "tick_size": 0.01},
+         }
++        self._symbols: Set[str] = set(self._meta.keys())
+ 
+     def register(self, symbol: str, meta: Optional[Dict[str, Any]] = None) -> None:
+         self._symbols.add(symbol)
+diff --git a/spv-quantum-ai/market/websocket.py b/spv-quantum-ai/market/websocket.py
+index fac92c5..0ba3687 100644
+--- a/spv-quantum-ai/market/websocket.py
++++ b/spv-quantum-ai/market/websocket.py
+@@ -39,8 +39,20 @@ class WebSocketStreamManager:
+         feed_config = settings.yaml_config.get("market_feed", {})
+         self._feed_mode = feed_config.get("active", "mock").lower()
+ 
+-        # Mock price seed
+-        self._prices = {"BTCUSD": 65000.0, "ETHUSD": 3500.0, "NIFTY50": 24200.0, "BANKNIFTY": 52000.0}
++        # Mock price seed — spans Index, Equity, Currency, Commodity, and Crypto segments
++        self._prices = {
++            # Index
++            "NIFTY50": 24200.0, "BANKNIFTY": 52000.0, "FINNIFTY": 23500.0,
++            # Equity
++            "RELIANCE": 2950.0, "TCS": 3850.0, "HDFCBANK": 1650.0, "INFY": 1850.0,
++            "ICICIBANK": 1150.0, "SBIN": 830.0, "ITC": 460.0,
++            # Currency
++            "USDINR": 83.50,
++            # Commodity
++            "CRUDEOIL": 6800.0, "GOLD": 72000.0, "SILVER": 92000.0, "NATURALGAS": 250.0,
++            # Crypto
++            "BTCUSD": 65000.0, "ETHUSD": 3500.0,
++        }
+ 
+     # ── Lifecycle ─────────────────────────────────────────────────────────────
+ 
+diff --git a/spv-quantum-ai/tests/test_websocket.py b/spv-quantum-ai/tests/test_websocket.py
+index d964cb6..864ecd4 100644
+--- a/spv-quantum-ai/tests/test_websocket.py
++++ b/spv-quantum-ai/tests/test_websocket.py
+@@ -38,6 +38,47 @@ async def test_websocket_connection_and_broadcast():
+             
+             # Clean up subscription
+             await event_bus.unsubscribe("test_topic", ws_event_broadcaster)
+-            
++
++    finally:
++        await event_bus.stop()
++
++
++@pytest.mark.asyncio
++async def test_websocket_broadcast_serializes_nested_datetime():
++    """Real event payloads (ticks, candles, decisions, trades) carry nested
++    datetime/Enum values from Pydantic .model_dump(). The stdlib json encoder
++    behind WebSocket.send_json() cannot serialize those directly, so the
++    broadcaster must run payloads through jsonable_encoder() first — otherwise
++    every broadcast silently fails and the client never receives anything."""
++    client = TestClient(app)
++    event_bus.start()
++
++    try:
++        with client.websocket_connect("/ws") as websocket:
++            from dashboard.main import ws_event_broadcaster
++            await event_bus.subscribe("test_topic_dt", ws_event_broadcaster)
++
++            evt = EventModel(
++                event_type="test_topic_dt",
++                source_agent="test_agent",
++                payload={
++                    "tick": {
++                        "symbol": "NIFTY50",
++                        "timestamp": datetime.now(timezone.utc),
++                        "close": 24200.0,
++                    }
++                }
++            )
++            await event_bus.publish(evt)
++            await asyncio.sleep(0.05)
++
++            data = websocket.receive_json()
++            assert data["topic"] == "test_topic_dt"
++            assert data["data"]["tick"]["symbol"] == "NIFTY50"
++            assert data["data"]["tick"]["close"] == 24200.0
++            assert isinstance(data["data"]["tick"]["timestamp"], str)
++
++            await event_bus.unsubscribe("test_topic_dt", ws_event_broadcaster)
++
+     finally:
+         await event_bus.stop()
+-- 
+2.43.0
+

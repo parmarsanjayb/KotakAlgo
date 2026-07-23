@@ -163,7 +163,23 @@ class EmployeeEngine:
 
     async def get_dashboard_metrics(self, tenant_id: Optional[str] = None) -> Dict[str, Any]:
         """Compiles AI employee registry lists and performance analytics for APIs."""
-        profiles = self.manager.get_profiles_by_tenant(tenant_id)
+        plan_tier = "FREE"
+        if tenant_id:
+            from database.connection import async_session
+            from database.models import SubscriptionModel
+            from sqlalchemy import select
+            try:
+                async with async_session() as session:
+                    result = await session.execute(
+                        select(SubscriptionModel).where(SubscriptionModel.user_id == tenant_id)
+                    )
+                    sub = result.scalars().first()
+                    if sub:
+                        plan_tier = sub.plan_tier
+            except Exception:
+                pass
+
+        profiles = self.manager.get_profiles_by_tenant(tenant_id, plan_tier)
         
         employee_list = []
         for p in profiles:

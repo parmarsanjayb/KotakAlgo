@@ -19,7 +19,7 @@ class SafetyEngine:
                 "holiday_guard": True,
                 "market_closing_guard": True,
                 "broker_disconnect_guard": True,
-                "cooldown_between_trades_sec": 10.0,
+                "cooldown_between_trades_sec": 10.0,    # paper-testing: keep flow high to expose bugs
                 "duplicate_symbol_protection": True,
                 "daily_loss_guard_usd": 500.0,
                 "daily_profit_lock_usd": 2000.0,
@@ -28,7 +28,11 @@ class SafetyEngine:
                 "max_open_positions_guard": 5,
                 "max_exposure_usd": 50000.0,
                 "hidden_sl_pct": 2.0,
-                "trailing_stop_pct": 1.0,
+                "trailing_stop_pct": 1.0,      # fixed fallback if ATR unavailable
+                "adaptive_trailing": True,     # volatility-adaptive (ATR-based) trailing
+                "atr_trail_mult": 2.5,         # trail width = 2.5 x ATR%
+                "trail_pct_min": 3.0,          # never trail tighter than 3% (avoid noise)
+                "trail_pct_max": 12.0,         # never wider than 12%
                 "break_even_shift_pct": 1.5,
                 "profit_lock_pct": 3.0
             }
@@ -57,12 +61,16 @@ class SafetyEngine:
     async def _handle_order_filled(self, event: EventModel) -> None:
         try:
             payload = event.payload
-            order_data = payload.get("order", payload)
-            symbol = order_data.get("symbol")
-            side = order_data.get("side", "BUY")
-            qty = float(order_data.get("filled_quantity", order_data.get("quantity", 0.0)))
-            avg_price = float(order_data.get("avg_fill_price", order_data.get("price", 0.0)))
-            pnl = float(payload.get("pnl", 0.0))
+            # The execution engine publishes OrderFilledEvent(order=...), so the
+            # order fields arrive NESTED under "order". Reading them flat silently
+            # produced symbol=None / qty=0, which meant the hidden stop-loss was
+            # never registered — so positions could never trail or auto-exit.
+            data = payload.get("order") or payload
+            symbol = data.get("symbol")
+            side = data.get("side", "BUY")
+            qty = float(data.get("filled_quantity", data.get("quantity", 0.0)) or 0.0)
+            avg_price = float(data.get("avg_price", data.get("price", 0.0)) or 0.0)
+            pnl = float(data.get("pnl", 0.0) or 0.0)
 
             # Record execution in trading guard
             self.manager.guard.record_execution(symbol, side, qty, pnl)
@@ -74,6 +82,12 @@ class SafetyEngine:
             if pos and pos.quantity != 0:
                 pos_side = "BUY" if pos.quantity > 0 else "SELL"
                 self.manager.protection.register_position(symbol, pos_side, pos.quantity, pos.avg_price)
+            elif qty > 0 and avg_price > 0:
+                # The portfolio position may not be committed yet when the fill
+                # event lands (async race). Register the protective stop straight
+                # from the fill itself, otherwise the hidden SL / trailing is
+                # silently skipped and the position can never auto-exit.
+                self.manager.protection.register_position(symbol, side, qty, avg_price)
             else:
                 self.manager.protection.register_position(symbol, side, 0, avg_price)
         except Exception as e:
@@ -84,7 +98,7 @@ class SafetyEngine:
         from portfolio.engine import portfolio_engine
         daily_pnl = portfolio_engine.summary.realized_pnl
         active_positions = [p for p in await portfolio_engine.positions.get_all_positions() if p.quantity != 0]
-        total_exposure = sum(abs(p.quantity * p.average_price) for p in active_positions)
+        total_exposure = sum(abs(p.quantity * p.avg_price) for p in active_positions)
 
         daily_loss_limit = float(self.config.get("daily_loss_guard_usd", 500.0))
         remaining_loss = max(0.0, daily_loss_limit - abs(daily_pnl)) if daily_pnl < 0 else daily_loss_limit

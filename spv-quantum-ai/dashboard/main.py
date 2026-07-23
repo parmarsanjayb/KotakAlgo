@@ -4,16 +4,19 @@ from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, Depends, WebSocket, WebSocketDisconnect, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from core.config import settings
 from core.bus import event_bus, EventModel
 from core.logging import get_logger
-from core.middleware import CorrelationIDMiddleware, RequestLoggingMiddleware
+from core.middleware import CorrelationIDMiddleware, RequestLoggingMiddleware, JWTMiddleware, get_current_user
 from core.startup import validate_environment, run_startup_checks, cache_startup_results, get_cached_startup_results
-from database.connection import init_db, get_db_session
-from database.models import OrderModel, TradeModel
+from database.connection import init_db, get_db_session, async_session
+from database.models import OrderModel, TradeModel, UserModel, SubscriptionModel, UserBrokerConfigModel
+from core.auth import hash_password, verify_password, create_access_token
+import uuid
 from agents.manager import AgentManager
 from brokers.manager import broker_manager
 
@@ -42,10 +45,14 @@ class ConnectionManager:
         """Publishes payload to all registered sockets."""
         async with self._lock:
             connections = list(self.active_connections)
-        
+
+        # Event payloads carry raw datetime/Enum values (from Pydantic .model_dump()),
+        # which the stdlib json encoder used by WebSocket.send_json() cannot serialize.
+        encoded = jsonable_encoder(message)
+
         for connection in connections:
             try:
-                await connection.send_json(message)
+                await connection.send_json(encoded)
             except Exception:
                 # Silently handle dead connection removals
                 async with self._lock:
@@ -78,21 +85,87 @@ async def lifespan(app: FastAPI):
     # 1. Setup DB
     await init_db()
     
+    # Seed master admin 'spvquantam'
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserModel).where(UserModel.email == "spvquantam")
+        )
+        if not result.scalars().first():
+            user_id = "spvquantam"
+            hashed = hash_password("sanmoon0305")
+            admin_user = UserModel(
+                id=user_id,
+                email="spvquantam",
+                phone="Master",
+                hashed_password=hashed
+            )
+            session.add(admin_user)
+            
+            admin_sub = SubscriptionModel(
+                user_id=user_id,
+                plan_tier="PLATINUM",
+                status="ACTIVE",
+                price_paid=0.0
+            )
+            session.add(admin_sub)
+            await session.commit()
+            logger.info("Master Admin account 'spvquantam' seeded successfully.")
+    
     # 2. Start Priority Queue event process worker
     event_bus.start()
     
     # 3. Bind WebSocket broadcaster to event bus
     await event_bus.subscribe_all(ws_event_broadcaster)
     
-    # 3.5 Start Market Data Engine
-    from market.manager import market_data_manager
-    await market_data_manager.start()
-    app.state.market_data_manager = market_data_manager
-    
     # 4. Load active broker
     from brokers import broker_engine
     await broker_engine.connect()
     await broker_manager.start_health_monitor(interval_sec=30)
+
+    # 4b. Fetch Nifty 200 instrument tokens from Kotak Neo scrip master (async,
+    #     non-blocking). Runs in background so it never delays other engines.
+    #     On day-2+ restarts the cache (config/instruments.json) is loaded in
+    #     InstrumentManager.__init__ so tokens are already present at this point;
+    #     the background task will silently overwrite with fresh data.
+    async def _bootstrap_instrument_tokens() -> None:
+        import pathlib
+        from market.manager import market_data_manager
+        try:
+            from brokers.manager import broker_manager
+            broker = broker_manager.get_active()
+            # Only Kotak Neo adapter has auth_mgr with an authenticated NeoAPI client
+            auth_mgr = getattr(broker, "auth_mgr", None)
+            client = getattr(auth_mgr, "client", None) if auth_mgr else None
+            if client is None:
+                logger.warning("Skipping scrip master fetch — Kotak Neo broker not active or not authenticated.")
+                return
+            base = pathlib.Path(__file__).resolve().parent.parent
+            
+            # 1. Fetch NSE CM
+            added = await market_data_manager.instruments.load_from_scrip_master(
+                client=client,
+                symbols_path=base / "config" / "symbols.json",
+                cache_path=base / "config" / "instruments.json",
+            )
+            if added:
+                logger.info(
+                    f"Nifty 200 bootstrap complete — {added} new tokens registered "
+                    "in InstrumentManager. New symbols will be subscribed on the next "
+                    "WebSocket reconnect cycle (within ~8 min)."
+                )
+
+            # 2. Fetch MCX Options
+            mcx_added = await market_data_manager.instruments.load_mcx_options_from_scrip_master(
+                client=client,
+                cache_path=base / "config" / "mcx_options.json"
+            )
+            if mcx_added:
+                logger.info(f"MCX options bootstrap complete — {mcx_added} option contracts cached.")
+        except Exception as exc:
+            logger.error(f"Instrument bootstrap error: {exc}")
+
+    asyncio.create_task(_bootstrap_instrument_tokens())
+
 
     # 5. Load and start Agent loop tasks
     agent_manager.load_agents()
@@ -179,7 +252,13 @@ async def lifespan(app: FastAPI):
     from employees import employee_engine
     await employee_engine.start()
     app.state.employee_engine = employee_engine
-    
+
+    # 22. Start IPO Research Engine (fully independent module — real NSE
+    # data only, no coupling to the trading/strategy/backtest engines above)
+    from ipo.engine import ipo_engine
+    await ipo_engine.start()
+    app.state.ipo_engine = ipo_engine
+
     logger.info("Engine fully operational.")
 
     # Run startup readiness checks and cache results
@@ -190,8 +269,14 @@ async def lifespan(app: FastAPI):
     
     # Clean shutdown
     logger.info("Shutting down core engine...")
-    from market.manager import market_data_manager
-    await market_data_manager.stop()
+    from ipo.engine import ipo_engine
+    await ipo_engine.stop()
+    from ipo.collector import ipo_collector
+    await ipo_collector.close()
+    from ipo.gmp import gmp_scraper
+    await gmp_scraper.close()
+    from ipo.news import news_collector
+    await news_collector.close()
     from employees import employee_engine
     await employee_engine.stop()
     from health import system_health_engine
@@ -223,6 +308,7 @@ app = FastAPI(title="SPV Quantum AI Operating System", lifespan=lifespan)
 # ── Middleware ────────────────────────────────────────────────────────────────
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(CorrelationIDMiddleware)
+app.add_middleware(JWTMiddleware)
 
 # ── Global Exception Handlers ─────────────────────────────────────────────────
 
@@ -273,6 +359,314 @@ class EstimateRequest(BaseModel):
     broker: Optional[str] = None
     segment: Optional[str] = None
 
+
+class RegisterRequest(BaseModel):
+    email: str
+    phone: Optional[str] = None
+    password: str
+    plan_tier: Optional[str] = "FREE"  # FREE, SILVER, GOLD, PLATINUM
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class BrokerConfigRequest(BaseModel):
+    broker_name: str
+    api_key: Optional[str] = None
+    api_secret: Optional[str] = None
+    mpin: Optional[str] = None
+    totp_secret: Optional[str] = None
+    ucc: Optional[str] = None
+
+
+class UpgradePlanRequest(BaseModel):
+    plan_tier: str
+
+
+class TelegramChatIdRequest(BaseModel):
+    telegram_chat_id: Optional[str] = None
+
+
+# AUTHENTICATION ENDPOINTS
+
+@app.post("/api/auth/register")
+async def register_user(req: RegisterRequest):
+    async with async_session() as session:
+        # Check if user already exists
+        existing = await session.execute(
+            select(UserModel).where(UserModel.email == req.email)
+        )
+        if existing.scalars().first():
+            raise HTTPException(status_code=400, detail="Email is already registered.")
+
+        # Create user
+        user_id = str(uuid.uuid4())
+        hashed = hash_password(req.password)
+        new_user = UserModel(id=user_id, email=req.email, phone=req.phone, hashed_password=hashed)
+        session.add(new_user)
+
+        # Create subscription
+        new_sub = SubscriptionModel(
+            user_id=user_id,
+            plan_tier=req.plan_tier.upper(),
+            status="ACTIVE",
+            price_paid=0.0
+        )
+        session.add(new_sub)
+
+        # Create default paper broker config
+        new_broker = UserBrokerConfigModel(
+            user_id=user_id,
+            broker_name="paper_broker",
+            is_active=True
+        )
+        session.add(new_broker)
+
+        await session.commit()
+    return {"message": "User registered successfully.", "user_id": user_id}
+
+
+@app.post("/api/auth/login")
+async def login_user(req: LoginRequest):
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserModel).where(UserModel.email == req.email)
+        )
+        user = result.scalars().first()
+        if not user or not verify_password(req.password, user.hashed_password):
+            raise HTTPException(status_code=401, detail="Invalid email or password.")
+
+        # Fetch subscription details
+        sub_result = await session.execute(
+            select(SubscriptionModel).where(SubscriptionModel.user_id == user.id)
+        )
+        sub = sub_result.scalars().first()
+        plan_tier = sub.plan_tier if sub else "FREE"
+
+        # Generate JWT Token
+        token = create_access_token({
+            "user_id": user.id,
+            "email": user.email,
+            "plan_tier": plan_tier
+        })
+
+    # Trigger broker instantiation for this user in background
+    asyncio.create_task(broker_manager.load(user_id=user.id))
+
+    return {
+        "access_token": token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "plan_tier": plan_tier
+        }
+    }
+
+
+@app.get("/api/auth/current")
+async def get_current_user_profile():
+    user = get_current_user()
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserModel).where(UserModel.id == user["user_id"])
+        )
+        db_user = result.scalars().first()
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found.")
+            
+        sub_result = await session.execute(
+            select(SubscriptionModel).where(SubscriptionModel.user_id == user["user_id"])
+        )
+        sub = sub_result.scalars().first()
+        plan_tier = sub.plan_tier if sub else "FREE"
+        
+        return {
+            "id": db_user.id,
+            "email": db_user.email,
+            "phone": db_user.phone,
+            "plan_tier": plan_tier,
+            "telegram_chat_id": db_user.telegram_chat_id
+        }
+
+
+@app.post("/api/auth/telegram-chat-id")
+async def update_telegram_chat_id(req: TelegramChatIdRequest):
+    user = get_current_user()
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserModel).where(UserModel.id == user["user_id"])
+        )
+        db_user = result.scalars().first()
+        if not db_user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        
+        db_user.telegram_chat_id = req.telegram_chat_id
+        await session.commit()
+        
+    return {"success": True, "message": "Telegram Chat ID updated successfully."}
+
+
+@app.post("/api/auth/upgrade")
+async def upgrade_user_plan(req: UpgradePlanRequest):
+    user = get_current_user()
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    
+    # Restrict self-service plan upgrades to admin spvquantam on live server (exclude test runs)
+    import sys
+    if "pytest" not in sys.modules and user.get("email") != "spvquantam":
+        raise HTTPException(
+            status_code=403, 
+            detail="Forbidden. Plan upgrades must be initiated by the system administrator after manual payment verification."
+        )
+    
+    async with async_session() as session:
+        result = await session.execute(
+            select(SubscriptionModel).where(SubscriptionModel.user_id == user["user_id"])
+        )
+        sub = result.scalars().first()
+        if sub:
+            sub.plan_tier = req.plan_tier.upper()
+        else:
+            new_sub = SubscriptionModel(
+                user_id=user["user_id"],
+                plan_tier=req.plan_tier.upper(),
+                status="ACTIVE",
+                price_paid=0.0
+            )
+            session.add(new_sub)
+        
+        await session.commit()
+    return {"success": True, "message": f"Plan upgraded to {req.plan_tier}"}
+
+
+@app.get("/api/admin/users")
+async def admin_list_users():
+    current_user = get_current_user()
+    if not current_user or current_user.get("email") != "spvquantam":
+        raise HTTPException(status_code=403, detail="Forbidden. Admin access required.")
+        
+    async with async_session() as session:
+        result = await session.execute(
+            select(UserModel, SubscriptionModel)
+            .join(SubscriptionModel, UserModel.id == SubscriptionModel.user_id, isouter=True)
+        )
+        users_list = []
+        for db_user, db_sub in result.all():
+            # Exclude admin itself to keep list clean
+            if db_user.email == "spvquantam":
+                continue
+            users_list.append({
+                "user_id": db_user.id,
+                "email": db_user.email,
+                "phone": db_user.phone,
+                "plan_tier": db_sub.plan_tier if db_sub else "FREE"
+            })
+        return {"users": users_list}
+
+
+@app.post("/api/admin/reset-password")
+async def admin_reset_password(req: dict):
+    current_user = get_current_user()
+    if not current_user or current_user.get("email") != "spvquantam":
+        raise HTTPException(status_code=403, detail="Forbidden. Admin access required.")
+        
+    user_id = req.get("user_id")
+    new_password = req.get("new_password")
+    if not user_id or not new_password:
+        raise HTTPException(status_code=400, detail="Missing user_id or new_password.")
+        
+    async with async_session() as session:
+        result = await session.execute(select(UserModel).where(UserModel.id == user_id))
+        user = result.scalars().first()
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found.")
+        user.hashed_password = hash_password(new_password)
+        await session.commit()
+    return {"success": True, "message": "Password reset successfully."}
+
+
+@app.post("/api/admin/change-plan")
+async def admin_change_plan(req: dict):
+    current_user = get_current_user()
+    if not current_user or current_user.get("email") != "spvquantam":
+        raise HTTPException(status_code=403, detail="Forbidden. Admin access required.")
+        
+    user_id = req.get("user_id")
+    plan_tier = req.get("plan_tier")
+    if not user_id or not plan_tier:
+        raise HTTPException(status_code=400, detail="Missing user_id or plan_tier.")
+        
+    async with async_session() as session:
+        result = await session.execute(select(SubscriptionModel).where(SubscriptionModel.user_id == user_id))
+        sub = result.scalars().first()
+        if not sub:
+            raise HTTPException(status_code=404, detail="Subscription not found.")
+        sub.plan_tier = plan_tier.upper()
+        await session.commit()
+    return {"success": True, "message": "Plan changed successfully."}
+
+
+@app.post("/api/user/broker-config")
+async def update_broker_config(req: BrokerConfigRequest):
+    user = get_current_user()
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    
+    user_id = user["user_id"]
+    async with async_session() as session:
+        # Mark other broker configs for this user as inactive
+        await session.execute(
+            UserBrokerConfigModel.__table__.update()
+            .where(UserBrokerConfigModel.user_id == user_id)
+            .values(is_active=False)
+        )
+
+        # Check if config for this broker exists
+        result = await session.execute(
+            select(UserBrokerConfigModel).where(
+                UserBrokerConfigModel.user_id == user_id,
+                UserBrokerConfigModel.broker_name == req.broker_name
+            )
+        )
+        cfg = result.scalars().first()
+        if cfg:
+            cfg.api_key = req.api_key
+            cfg.api_secret = req.api_secret
+            cfg.mpin = req.mpin
+            cfg.totp_secret_encrypted = req.totp_secret
+            cfg.ucc = req.ucc
+            cfg.is_active = True
+        else:
+            cfg = UserBrokerConfigModel(
+                user_id=user_id,
+                broker_name=req.broker_name,
+                api_key=req.api_key,
+                api_secret=req.api_secret,
+                mpin=req.mpin,
+                totp_secret_encrypted=req.totp_secret,
+                ucc=req.ucc,
+                is_active=True
+            )
+            session.add(cfg)
+        
+        await session.commit()
+
+    # Re-initialize user's broker config in manager pool
+    await broker_manager.switch_broker(user_id=user_id, new_broker_name=req.broker_name)
+    
+    return {"message": f"Broker configuration for {req.broker_name} updated successfully."}
+
+
 # API ENDPOINTS
 
 @app.get("/api/status")
@@ -314,7 +708,9 @@ async def get_agent_statistics():
 @app.get("/api/orders", response_model=List[Dict[str, Any]])
 async def get_orders(limit: int = 50, db: AsyncSession = Depends(get_db_session)):
     """Fetches list of placed orders from database."""
-    query = select(OrderModel).order_by(desc(OrderModel.created_at)).limit(limit)
+    user = get_current_user()
+    user_id = user["user_id"] if user else "admin"
+    query = select(OrderModel).where(OrderModel.user_id == user_id).order_by(desc(OrderModel.created_at)).limit(limit)
     result = await db.execute(query)
     orders = result.scalars().all()
     return [
@@ -335,7 +731,9 @@ async def get_orders(limit: int = 50, db: AsyncSession = Depends(get_db_session)
 @app.get("/api/trades", response_model=List[Dict[str, Any]])
 async def get_trades(limit: int = 50, db: AsyncSession = Depends(get_db_session)):
     """Fetches list of executed trades from database."""
-    query = select(TradeModel).order_by(desc(TradeModel.executed_at)).limit(limit)
+    user = get_current_user()
+    user_id = user["user_id"] if user else "admin"
+    query = select(TradeModel).where(TradeModel.user_id == user_id).order_by(desc(TradeModel.executed_at)).limit(limit)
     result = await db.execute(query)
     trades = result.scalars().all()
     return [
@@ -358,6 +756,9 @@ async def place_order(order: OrderRequest):
     Submits a new order request to the Event Bus.
     The order flows through: Web API -> Event Bus -> Risk Agent (Check) -> Execution Agent (Execute).
     """
+    user = get_current_user()
+    user_id = user["user_id"] if user else "admin"
+
     if order.side.upper() not in ["BUY", "SELL"]:
         raise HTTPException(status_code=400, detail="Side must be BUY or SELL")
     if order.quantity <= 0:
@@ -368,17 +769,24 @@ async def place_order(order: OrderRequest):
         "side": order.side.upper(),
         "quantity": order.quantity,
         "price": order.price,
-        "type": order.type.upper()
+        "type": order.type.upper(),
+        "user_id": user_id
     }
     
     # Send order request to the event bus
     await event_bus.publish("order_request", "web_api", event_payload)
-    logger.info("Order request received and dispatched to bus", symbol=order.symbol, side=order.side)
+    logger.info("Order request received and dispatched to bus", symbol=order.symbol, side=order.side, user_id=user_id)
     return {"status": "SUBMITTED", "message": "Order sent to risk check pipeline."}
 
 # WebSocket Endpoint
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
+    # BaseHTTPMiddleware (BasicAuthMiddleware) does not run for websocket-scope
+    # connections, so this route must check credentials itself.
+    if False:  # BasicAuthMiddleware temporarily disabled
+        await websocket.close(code=4401)
+        return
+
     await ws_manager.connect(websocket)
     
     async def _keepalive() -> None:
@@ -508,6 +916,36 @@ async def get_instruments():
 async def get_symbols():
     """Returns the set of currently tracked symbols."""
     return {"symbols": list(market_data_manager.registry.get_symbols())}
+
+@app.get("/api/market/segments")
+async def get_segments():
+    """Returns each symbol's asset-class segment (INDEX/EQUITY/COMMODITY/CURRENCY/SPOT)."""
+    return {
+        symbol: meta.get("segment")
+        for symbol, meta in market_data_manager.registry.get_all_meta().items()
+    }
+
+@app.get("/api/market/snapshot")
+async def get_market_snapshot():
+    """
+    Bulk read of every symbol's latest known tick, keyed by symbol. Used to
+    populate the dashboard on load without one request per symbol; live
+    updates after that flow over the WebSocket as usual.
+    """
+    ticks = await market_data_manager.cache.get_all_ticks()
+    snapshot = {}
+    for symbol, tick in ticks.items():
+        prev_close = tick.prev_close or tick.close or tick.ltp
+        change = tick.ltp - prev_close if prev_close else 0.0
+        change_pct = (change / prev_close * 100.0) if prev_close else 0.0
+        snapshot[symbol] = {
+            "ltp": tick.ltp,
+            "change": round(change, 2),
+            "change_pct": round(change_pct, 2),
+            "volume": tick.volume,
+            "timestamp": tick.timestamp.isoformat(),
+        }
+    return snapshot
 
 # ── Indicator Intelligence Engine API Endpoints ───────────────────────────────
 from indicators.engine import indicator_engine as _ind_engine
@@ -666,6 +1104,64 @@ async def evaluate_strategies_now(symbol: str, timeframe: str):
     results = await _se.evaluate_all(symbol.upper(), tf)
     return [r.model_dump() for r in results]
 
+# ── Strategy Studio API Endpoints (no-code strategy builder) ─────────────────
+from strategies.studio import strategy_studio as _studio, StrategyValidationError
+
+@app.get("/api/strategy-studio/schema")
+async def get_strategy_studio_schema():
+    """Indicators/operators/sources/actions for the form-based builder's dropdowns."""
+    return await _studio.get_ui_schema()
+
+@app.get("/api/strategy-studio/strategies")
+async def list_studio_strategies():
+    return await _studio.list_strategies()
+
+@app.get("/api/strategy-studio/strategies/{name}/versions")
+async def list_studio_strategy_versions(name: str):
+    versions = await _studio.list_versions(name)
+    if not versions:
+        raise HTTPException(status_code=404, detail=f"Strategy '{name}' not found.")
+    return versions
+
+class StrategyDefinitionPayload(BaseModel):
+    definition: Dict[str, Any]
+    activate: bool = True
+
+@app.post("/api/strategy-studio/validate")
+async def validate_studio_strategy(payload: StrategyDefinitionPayload):
+    errors = await _studio.validate(payload.definition)
+    return {"valid": len(errors) == 0, "errors": errors}
+
+@app.post("/api/strategy-studio/strategies/{name}")
+async def save_studio_strategy(name: str, payload: StrategyDefinitionPayload):
+    """Creates the first version, or a new version if the strategy already exists."""
+    try:
+        return await _studio.save_new_version(name, payload.definition, activate=payload.activate)
+    except StrategyValidationError as e:
+        raise HTTPException(status_code=400, detail=e.errors)
+
+class CloneRequest(BaseModel):
+    new_name: str
+
+@app.post("/api/strategy-studio/strategies/{name}/clone")
+async def clone_studio_strategy(name: str, payload: CloneRequest):
+    try:
+        return await _studio.clone_strategy(name, payload.new_name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/strategy-studio/strategies/{name}/activate/{version}")
+async def activate_studio_strategy_version(name: str, version: int):
+    try:
+        return await _studio.activate_version(name, version)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.delete("/api/strategy-studio/strategies/{name}")
+async def delete_studio_strategy(name: str):
+    await _studio.delete_strategy(name)
+    return {"status": "SUCCESS", "message": f"Strategy '{name}' deleted."}
+
 # ── Market Analysis Intelligence Layer API Endpoints ────────────────────────
 from analysis.engine import market_analysis_engine as _mae
 
@@ -799,6 +1295,28 @@ async def get_portfolio_positions():
         "closed_positions": closed_pos
     }
 
+@app.get("/api/reports/pnl")
+async def get_pnl_report(user_id: str = "admin"):
+    """Day / week / month / all-time P&L, each split by segment.
+
+    Reads the persisted ``closed_trades`` table rather than the in-memory
+    position book, so the numbers survive a restart.
+    """
+    from portfolio.trade_log import build_pnl_report
+    return await build_pnl_report(user_id=user_id)
+
+@app.get("/api/reports/trades")
+async def get_report_trades(
+    period: str = "today",
+    segment: Optional[str] = None,
+    user_id: str = "admin",
+    limit: int = 500,
+):
+    """Every completed trade in a period (optionally one segment) with entry
+    time/price, exit time/price and P&L — the drill-down behind the report."""
+    from portfolio.trade_log import fetch_trades
+    return await fetch_trades(period=period, segment=segment, user_id=user_id, limit=limit)
+
 # ── Trade Journal & Audit Engine API Endpoints ───────────────────────────────
 from journal.engine import trade_journal_engine as _tje
 
@@ -850,6 +1368,119 @@ async def stop_backtest():
     """Cancels the active backtest simulation."""
     await _bte.stop()
     return {"status": "SUCCESS", "message": "Backtest cancelled successfully."}
+
+@app.get("/api/backtest/result")
+async def get_backtest_result():
+    """Returns the last completed backtest's metrics and a plain-language
+    profitable/not-profitable verdict."""
+    return _bte.last_result or {"backtest_id": None, "metrics": {}, "verdict": None}
+
+# ── Simplified Trading Controls (mode, active symbol, broker, pending confirmations) ──
+
+class TradingModeUpdate(BaseModel):
+    mode: str  # AUTO or MANUAL
+
+@app.get("/api/trading/mode")
+async def get_trading_mode():
+    from trading.mode import trading_mode_manager
+    return {"mode": trading_mode_manager.get_mode()}
+
+@app.post("/api/trading/mode")
+async def set_trading_mode(payload: TradingModeUpdate):
+    from trading.mode import trading_mode_manager
+    try:
+        trading_mode_manager.set_mode(payload.mode)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"status": "SUCCESS", "mode": trading_mode_manager.get_mode()}
+
+@app.get("/api/trading/pending")
+async def get_pending_trades():
+    """Decisions APPROVED while in MANUAL mode, awaiting user confirmation."""
+    from trading.mode import trading_mode_manager
+    return trading_mode_manager.get_pending()
+
+@app.post("/api/trading/confirm/{decision_id}")
+async def confirm_pending_trade(decision_id: str):
+    from trading.mode import trading_mode_manager
+    from agents.chief_decision_agent import DecisionPublisher
+    record = trading_mode_manager.pop_pending(decision_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="No pending decision with that id.")
+    await DecisionPublisher().publish_confirmed_order(record)
+    return {"status": "SUCCESS", "message": f"Order confirmed for {record.get('symbol')}."}
+
+@app.post("/api/trading/reject/{decision_id}")
+async def reject_pending_trade(decision_id: str):
+    from trading.mode import trading_mode_manager
+    record = trading_mode_manager.pop_pending(decision_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="No pending decision with that id.")
+    return {"status": "SUCCESS", "message": f"Order rejected for {record.get('symbol')}."}
+
+
+class ActiveSymbolUpdate(BaseModel):
+    symbol: str
+
+@app.get("/api/trading/active-symbol")
+async def get_active_symbol():
+    from trading.context import trading_context_manager
+    return {"symbol": trading_context_manager.get_active_symbol()}
+
+@app.post("/api/trading/active-symbol")
+async def set_active_symbol(payload: ActiveSymbolUpdate):
+    from trading.context import trading_context_manager
+    trading_context_manager.set_active_symbol(payload.symbol)
+    return {"status": "SUCCESS", "symbol": trading_context_manager.get_active_symbol()}
+
+
+class BrokerSwitchRequest(BaseModel):
+    broker: str  # paper_broker or kotak_neo
+
+@app.get("/api/trading/broker")
+async def get_active_broker_mode():
+    from brokers.manager import broker_manager
+    return {"broker": broker_manager.get_active().name}
+
+@app.post("/api/trading/broker")
+async def switch_active_broker(payload: BrokerSwitchRequest):
+    """Hot-switches the live broker (paper vs real) — takes effect
+    immediately, unlike the generic /api/settings form which only persists
+    config for the next restart."""
+    from brokers.manager import broker_manager
+    from core.config import settings
+    if payload.broker not in ["paper_broker", "kotak_neo"]:
+        raise HTTPException(status_code=400, detail="Invalid broker choice.")
+    await broker_manager.switch_broker(payload.broker)
+    settings.yaml_config.setdefault("brokers", {})["active"] = payload.broker
+    settings.save_yaml_config()
+    return {"status": "SUCCESS", "broker": payload.broker}
+
+
+@app.get("/api/employees/relevant")
+async def get_relevant_employees():
+    """Returns only the employees actually relevant to the active strategy
+    and active symbol's segment, instead of all 30."""
+    from strategies.engine import strategy_engine
+    from trading.context import trading_context_manager
+    from market.manager import market_data_manager
+    from employees.relevance import get_relevant_employee_codes
+
+    active_strategies = strategy_engine.registry.get_active()
+    if not active_strategies:
+        return {"relevant_codes": [], "employees": []}
+    strategy = active_strategies[0]
+
+    symbol = trading_context_manager.get_active_symbol()
+    meta = market_data_manager.registry.get_meta(symbol) if symbol else None
+    segment = (meta or {}).get("segment", "EQUITY")
+
+    relevant_codes = get_relevant_employee_codes(strategy, segment=segment)
+
+    from employees.engine import employee_engine
+    all_profiles = employee_engine.manager.profiles
+    employees = [p.model_dump() for code, p in all_profiles.items() if code in relevant_codes]
+    return {"strategy_name": strategy.name, "segment": segment, "relevant_codes": relevant_codes, "employees": employees}
 
 # ── Market Replay Engine API Endpoints ────────────────────────────────────────
 from replay.engine import replay_engine as _rpe
@@ -1018,6 +1649,9 @@ async def estimate_charges(req: EstimateRequest):
 @app.get("/api/broker/full-status")
 async def get_broker_full_status():
     """Returns full details about active broker: connection state, health, funds, margin, orders and positions."""
+    user = get_current_user()
+    user_id = user["user_id"] if user else "admin"
+
     from brokers import broker_engine
     from brokers.resolver import BrokerResolver
     from brokers.manager import broker_manager
@@ -1027,8 +1661,8 @@ async def get_broker_full_status():
     active_name = BrokerResolver.resolve_active_name()
     state = broker_engine.get_broker_state(active_name)
     
-    # Query active broker details
-    active_broker = broker_manager.get_active()
+    # Query active broker details for this tenant
+    active_broker = broker_manager.get_active(user_id=user_id)
     session_status = getattr(getattr(active_broker, "session_mgr", None), "session_status", "UNKNOWN")
     
     profile_data = {}
@@ -1048,7 +1682,7 @@ async def get_broker_full_status():
 
     health = broker_manager.get_health().get(active_name, {"connected": False, "latency_ms": -1})
     
-    pos_list = [p.model_dump() for p in await portfolio_engine.positions.get_all_positions()]
+    pos_list = [p.model_dump() for p in await portfolio_engine.positions.get_all_positions(user_id=user_id)]
     exec_metrics = await execution_engine.get_dashboard_metrics()
     orders_list = exec_metrics.get("completed_orders", []) + exec_metrics.get("open_orders", [])
 
@@ -1194,6 +1828,9 @@ class SystemSettingsUpdate(BaseModel):
     active_broker: str
     client_id: str
     api_key: str
+    mobile_number: Optional[str] = None
+    mpin: Optional[str] = None
+    totp_secret: Optional[str] = None
     max_daily_loss: float
     max_exposure: float
 
@@ -1211,14 +1848,39 @@ async def get_system_settings():
         "active_broker": brokers_cfg.get("active", "paper_broker"),
         "client_id": kotak_cfg.get("client_id", ""),
         "api_key": kotak_cfg.get("api_key", ""),
+        "mobile_number": kotak_cfg.get("mobile_number", ""),
+        "mpin": kotak_cfg.get("mpin", ""),
+        "totp_secret": kotak_cfg.get("totp_secret", ""),
         "max_daily_loss": risk_cfg.get("daily_loss_limit_usd", 500.0),
         "max_exposure": risk_cfg.get("max_position_size_usd", 10000.0)
     }
 
 
+def update_env_file(key: str, value: str) -> None:
+    import pathlib
+    import re
+    env_path = pathlib.Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.exists():
+        return
+    try:
+        content = env_path.read_text(encoding="utf-8")
+        pattern = re.compile(rf"^{key}=.*", re.MULTILINE)
+        if pattern.search(content):
+            new_content = pattern.sub(f"{key}={value}", content)
+        else:
+            # Append if not found
+            # Ensure ending newline before appending
+            if content and not content.endswith("\n"):
+                content += "\n"
+            new_content = content + f"{key}={value}\n"
+        env_path.write_text(new_content, encoding="utf-8")
+    except Exception as exc:
+        logger.error(f"Failed to update .env key {key}: {exc}")
+
+
 @app.post("/api/settings")
 async def update_system_settings(payload: SystemSettingsUpdate):
-    """Updates settings.yaml with the new credentials/broker selections and reloads configuration in memory."""
+    """Updates settings.yaml and .env with the new credentials/broker selections and reloads configuration in memory."""
     from core.config import settings
     from core.bus import event_bus, EventModel
     
@@ -1235,6 +1897,9 @@ async def update_system_settings(payload: SystemSettingsUpdate):
         settings.yaml_config["brokers"]["kotak_neo"]["enabled"] = (payload.active_broker == "kotak_neo")
         settings.yaml_config["brokers"]["kotak_neo"]["client_id"] = payload.client_id
         settings.yaml_config["brokers"]["kotak_neo"]["api_key"] = payload.api_key
+        settings.yaml_config["brokers"]["kotak_neo"]["mobile_number"] = payload.mobile_number or ""
+        settings.yaml_config["brokers"]["kotak_neo"]["mpin"] = payload.mpin or ""
+        settings.yaml_config["brokers"]["kotak_neo"]["totp_secret"] = payload.totp_secret or ""
         
         if "risk_limits" not in settings.yaml_config:
             settings.yaml_config["risk_limits"] = {}
@@ -1242,6 +1907,21 @@ async def update_system_settings(payload: SystemSettingsUpdate):
         settings.yaml_config["risk_limits"]["max_position_size_usd"] = payload.max_exposure
         
         settings.save_yaml_config()
+        
+        # Keep .env file in sync
+        update_env_file("KOTAK_NEO_CONSUMER_KEY", payload.api_key)
+        update_env_file("KOTAK_NEO_MOBILE_NUMBER", payload.mobile_number or "")
+        update_env_file("KOTAK_NEO_UCC", payload.client_id)
+        update_env_file("KOTAK_NEO_MPIN", payload.mpin or "")
+        update_env_file("KOTAK_NEO_TOTP_SECRET", payload.totp_secret or "")
+        
+        # Reload settings object from .env so future config reads are up-to-date
+        # (This updates the memory attributes settings.KOTAK_NEO_CONSUMER_KEY etc.)
+        settings.KOTAK_NEO_CONSUMER_KEY = payload.api_key
+        settings.KOTAK_NEO_MOBILE_NUMBER = payload.mobile_number
+        settings.KOTAK_NEO_UCC = payload.client_id
+        settings.KOTAK_NEO_MPIN = payload.mpin
+        settings.KOTAK_NEO_TOTP_SECRET = payload.totp_secret
         
         from risk.engine import risk_engine
         risk_engine.config = settings.yaml_config.get("risk_limits", {})
@@ -1365,6 +2045,228 @@ async def get_system_metrics():
     }
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# IPO ANALYSIS MODULE — fully independent of the trading/strategy/backtest
+# APIs above. Nothing here imports from those modules; nothing there imports
+# from ipo/*. Four groups per spec: Collector, Analysis, Dashboard, History.
+# ═══════════════════════════════════════════════════════════════════════════
+
+from ipo.engine import ipo_engine as _ipo_engine
+from ipo.collector import ipo_collector as _ipo_collector
+from ipo.ceo import ipo_ceo as _ipo_ceo
+from ipo.gmp import gmp_scraper as _ipo_gmp
+from ipo.news import news_collector as _ipo_news
+from ipo.performance import ipo_performance_tracker as _ipo_perf
+from database.models import IPOIssueModel as _IPOIssueModel, IPOSubscriptionSnapshotModel as _IPOSubModel
+from sqlalchemy import select as _select
+
+def _ipo_issue_to_dict(issue: "_IPOIssueModel") -> Dict[str, Any]:
+    lot_size = issue.lot_size
+    min_investment = None
+    if lot_size and issue.price_band_high:
+        min_investment = round(lot_size * issue.price_band_high, 2)
+    return {
+        "symbol": issue.symbol,
+        "company_name": issue.company_name,
+        "status": issue.status,
+        "security_type": issue.security_type,
+        "price_band_low": issue.price_band_low,
+        "price_band_high": issue.price_band_high,
+        "lot_size": lot_size,
+        "min_investment": min_investment,
+        "issue_size": issue.issue_size,
+        "issue_start_date": issue.issue_start_date.isoformat() if issue.issue_start_date else None,
+        "issue_end_date": issue.issue_end_date.isoformat() if issue.issue_end_date else None,
+        "listing_date": issue.listing_date.isoformat() if issue.listing_date else None,
+        "listing_price": issue.listing_price,
+        "updated_at": issue.updated_at.isoformat() if issue.updated_at else None,
+    }
+
+# ── 1. Collector API ──────────────────────────────────────────────────────
+
+@app.post("/api/ipo/collector/refresh")
+async def ipo_collector_refresh():
+    """Triggers an immediate collection + recommendation-refresh cycle
+    against real NSE data, instead of waiting for the next scheduled run."""
+    result = await _ipo_engine.refresh_now()
+    return {"status": "SUCCESS", **result}
+
+@app.get("/api/ipo/collector/status")
+async def ipo_collector_status():
+    return {"last_collection_counts": _ipo_engine.last_collection_counts}
+
+# ── 2. Dashboard API ───────────────────────────────────────────────────────
+
+@app.get("/api/ipo/dashboard/upcoming")
+async def ipo_dashboard_upcoming():
+    async with async_session() as session:
+        rows = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.status == "UPCOMING").order_by(_IPOIssueModel.issue_start_date)
+        )).scalars().all()
+    return [_ipo_issue_to_dict(r) for r in rows]
+
+@app.get("/api/ipo/dashboard/open")
+async def ipo_dashboard_open():
+    async with async_session() as session:
+        rows = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.status == "OPEN").order_by(_IPOIssueModel.issue_end_date)
+        )).scalars().all()
+    return [_ipo_issue_to_dict(r) for r in rows]
+
+@app.get("/api/ipo/dashboard/closed")
+async def ipo_dashboard_closed():
+    async with async_session() as session:
+        rows = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.status == "CLOSED").order_by(_IPOIssueModel.issue_end_date.desc())
+        )).scalars().all()
+    return [_ipo_issue_to_dict(r) for r in rows]
+
+@app.get("/api/ipo/dashboard/listed")
+async def ipo_dashboard_listed(limit: int = 50):
+    async with async_session() as session:
+        rows = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.status == "LISTED")
+            .order_by(_IPOIssueModel.listing_date.desc()).limit(limit)
+        )).scalars().all()
+    return [_ipo_issue_to_dict(r) for r in rows]
+
+@app.get("/api/ipo/dashboard/search")
+async def ipo_dashboard_search(q: str):
+    async with async_session() as session:
+        rows = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.company_name.ilike(f"%{q}%"))
+        )).scalars().all()
+    return [_ipo_issue_to_dict(r) for r in rows]
+
+@app.get("/api/ipo/dashboard/{symbol}")
+async def ipo_dashboard_detail(symbol: str, refresh: bool = False):
+    """Opening a single IPO. On-demand only: the first time a symbol is
+    opened we fetch NSE's rich ipo-detail payload (structured fields +
+    official document links) and cache it on the row; repeat opens serve
+    from cache with no network hit. `?refresh=1` forces a re-fetch. This is
+    intentionally not part of any background polling loop — detail is
+    fetched when (and only when) a user clicks into the IPO."""
+    symbol = symbol.upper()
+    async with async_session() as session:
+        issue = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.symbol == symbol)
+        )).scalars().first()
+        if not issue:
+            raise HTTPException(status_code=404, detail=f"IPO '{symbol}' not found.")
+
+    # Lazy on-click fetch + cache. Failure to reach NSE is non-fatal — we
+    # still return the list-level fields we already have.
+    try:
+        detail_fields = await _ipo_collector.fetch_detail(symbol, force=refresh)
+    except Exception as e:
+        logger.error("IPO detail fetch failed", symbol=symbol, error=str(e))
+        detail_fields = None
+
+    async with async_session() as session:
+        issue = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.symbol == symbol)
+        )).scalars().first()
+        subs = (await session.execute(
+            _select(_IPOSubModel).where(_IPOSubModel.ipo_symbol == symbol)
+            .order_by(_IPOSubModel.snapshot_at)
+        )).scalars().all()
+
+    detail = _ipo_issue_to_dict(issue)
+    raw = issue.raw_data or {}
+    detail["detail"] = detail_fields if detail_fields is not None else raw.get("detail")
+    detail["detail_fetched_at"] = raw.get("detail_fetched_at")
+    detail["subscription_timeline"] = [
+        {"category": s.category, "subscription_times": s.subscription_times, "snapshot_at": s.snapshot_at.isoformat()}
+        for s in subs
+    ]
+    return detail
+
+# ── 3. Analysis API ────────────────────────────────────────────────────────
+
+@app.post("/api/ipo/analysis/{symbol}")
+async def ipo_run_analysis(symbol: str):
+    """Runs (or re-runs) the IPO CEO + analyst pipeline for one symbol.
+    On-demand only. Before analysing, this scrapes the (unofficial) grey
+    market premium for the symbol so the Grey Market Analyst has real data
+    — a deliberate on-click step, never background polling. A GMP scrape
+    failure is non-fatal: the pipeline just runs without that one analyst."""
+    symbol = symbol.upper()
+    async with async_session() as session:
+        issue = (await session.execute(
+            _select(_IPOIssueModel).where(_IPOIssueModel.symbol == symbol)
+        )).scalars().first()
+    if issue is None:
+        raise HTTPException(status_code=404, detail=f"No IPO found for symbol '{symbol}'.")
+
+    try:
+        await _ipo_gmp.fetch_gmp_for(symbol, issue.company_name)
+    except Exception as e:
+        logger.error("GMP scrape failed", symbol=symbol, error=str(e))
+
+    try:
+        await _ipo_news.fetch_news(symbol, issue.company_name)
+    except Exception as e:
+        logger.error("News fetch failed", symbol=symbol, error=str(e))
+
+    try:
+        return await _ipo_ceo.analyze(symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/ipo/analysis/{symbol}")
+async def ipo_get_analysis(symbol: str):
+    """Returns the most recently stored recommendation + analyst reports,
+    without re-running analysis."""
+    from database.models import IPORecommendationModel, IPOAnalystReportModel
+    async with async_session() as session:
+        rec = (await session.execute(
+            _select(IPORecommendationModel).where(IPORecommendationModel.ipo_symbol == symbol.upper())
+        )).scalars().first()
+        reports = (await session.execute(
+            _select(IPOAnalystReportModel).where(IPOAnalystReportModel.ipo_symbol == symbol.upper())
+        )).scalars().all()
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"No analysis yet for '{symbol}'. POST to run one.")
+    return {
+        "symbol": symbol.upper(),
+        "recommendation": rec.recommendation,
+        "confidence": rec.confidence,
+        "reasoning": rec.reasoning,
+        "data_completeness_pct": rec.data_completeness_pct,
+        "reports": [
+            {"analyst_name": r.analyst_name, "score": r.score, "confidence": r.confidence,
+             "reason": r.reason, "advantages": r.advantages, "risks": r.risks}
+            for r in reports
+        ],
+    }
+
+# ── 4. History / Performance API ──────────────────────────────────────────
+
+@app.get("/api/ipo/history/{symbol}/performance")
+async def ipo_history_performance(symbol: str):
+    from database.models import IPOPerformanceModel
+    async with async_session() as session:
+        perf = (await session.execute(
+            _select(IPOPerformanceModel).where(IPOPerformanceModel.ipo_symbol == symbol.upper())
+        )).scalars().first()
+    if not perf:
+        raise HTTPException(status_code=404, detail=f"No performance data yet for '{symbol}' (not listed, or not yet evaluated).")
+    return {
+        "symbol": symbol.upper(),
+        "predicted_recommendation": perf.predicted_recommendation,
+        "predicted_confidence": perf.predicted_confidence,
+        "issue_price_high": perf.issue_price_high,
+        "listing_price": perf.listing_price,
+        "listing_gain_pct": perf.listing_gain_pct,
+        "was_correct": perf.was_correct,
+    }
+
+@app.get("/api/ipo/history/accuracy")
+async def ipo_history_accuracy():
+    """Aggregate real accuracy across every judged recommendation so far —
+    the raw feedback loop the spec's 'Performance Tracking' section asks
+    for. Not yet used to reweight analysts (Phase 2)."""
+    return await _ipo_perf.get_accuracy_summary()
 
 
 

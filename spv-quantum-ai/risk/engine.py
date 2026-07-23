@@ -1,4 +1,5 @@
 import asyncio
+import math
 import time
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone
@@ -65,7 +66,23 @@ class RiskEngine:
         quantity = float(order_data.get("quantity", 0.0))
         price = float(order_data.get("price") or order_data.get("ltp") or 1.0)
         estimated_cost = quantity * price
-        
+
+        # An EXIT (closing SELL) must never be blocked by loss / drawdown /
+        # exposure limits. Those limits exist to stop NEW risk being taken;
+        # blocking an exit traps the position and lets the loss keep growing —
+        # the opposite of risk management. Closing always reduces exposure, so
+        # it is always permitted.
+        _raw_side = order_data.get("side", "")
+        if str(getattr(_raw_side, "value", _raw_side)).upper().split(".")[-1] == "SELL":
+            return RiskResponse(
+                risk_status=RiskStatus.ALLOW,
+                allowed=True,
+                reason="Exit order — always permitted (closing a position reduces risk).",
+                risk_score=0.0,
+                recommended_position_size=quantity,
+                recommended_max_loss=0.0,
+            )
+
         # Initial sizing recommendation
         sizing_strategy = order_data.get("sizing_strategy") or self.config.get("position_sizing_strategy", "fixed_quantity")
         sizing_params = order_data.get("sizing_params") or self.config.get("position_sizing_params", {})
@@ -145,7 +162,15 @@ class RiskEngine:
         # Max cost check
         max_cost_limit = self.max_position_size_usd
         if estimated_cost > max_cost_limit:
-            max_qty_allowed = max_cost_limit / price
+            # Equity trades on real exchanges only in whole shares — floor, never
+            # leave a fractional remainder like "5.599626691553897" in an order.
+            max_qty_allowed = math.floor(max_cost_limit / price)
+            if max_qty_allowed < 1:
+                return await self._block_response(
+                    order_data,
+                    f"Even 1 share of {symbol} at {price} exceeds max position size limit ${max_cost_limit}",
+                    rec_size,
+                )
             if self.config.get("allow_partial_size_adjustment", True):
                 final_size = max_qty_allowed
                 status = RiskStatus.REDUCE_POSITION

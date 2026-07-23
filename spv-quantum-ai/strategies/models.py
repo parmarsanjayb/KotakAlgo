@@ -20,7 +20,8 @@ class Strategy(BaseModel):
     version: str
     description: str = ""
     enabled: bool = True
-    rules: RuleGroup
+    rules: RuleGroup                          # entry condition (actions.matched)
+    exit_rules: Optional[RuleGroup] = None     # exit condition (actions.exit), evaluated when rules didn't match
     actions: Dict[str, Any] = Field(default_factory=dict)
 
 # Rebuilding forward refs for nested RuleGroup
@@ -38,15 +39,11 @@ class StrategyResponse(BaseModel):
 class StrategyMatchedEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    symbol: str
-    timeframe: str
     strategy_response: StrategyResponse
     context: Dict[str, Any] = Field(default_factory=dict)
 
 class StrategyRejectedEvent(BaseModel):
     event_id: str = Field(default_factory=lambda: uuid.uuid4().hex)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    symbol: str
-    timeframe: str
     strategy_response: StrategyResponse
     context: Dict[str, Any] = Field(default_factory=dict)

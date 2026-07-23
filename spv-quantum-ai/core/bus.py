@@ -145,6 +145,28 @@ class EventBus:
         event.priority = 0  # Max priority
         await self.publish(event)
 
+    async def drain(self, idle_rounds: int = 3, poll: float = 0.02, timeout: float = 5.0) -> None:
+        """Block until the queue is empty AND all in-flight handlers have finished,
+        and stayed that way for a few consecutive polls so cascaded events (a
+        handler that enqueues further events — e.g. candle -> indicator -> strategy
+        -> decision -> order) are fully processed too.
+
+        This is used by the backtest engine to let each replayed candle's entire
+        pipeline complete before the next candle is published. Live code never
+        calls it, so real-time behaviour is unchanged.
+        """
+        import time
+        deadline = time.monotonic() + timeout
+        idle = 0
+        while time.monotonic() < deadline:
+            if self._queue.qsize() == 0 and len(self._inflight_tasks) == 0:
+                idle += 1
+                if idle >= idle_rounds:
+                    return
+            else:
+                idle = 0
+            await asyncio.sleep(poll)
+
     async def _process_queue_loop(self) -> None:
         """Internal background loop polling items out of priority queue."""
         while self._is_running:

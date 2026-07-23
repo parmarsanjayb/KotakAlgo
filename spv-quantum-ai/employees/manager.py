@@ -11,6 +11,38 @@ from employees.publisher import EmployeePublisher
 
 logger = get_logger("employee_manager")
 
+def is_employee_allowed_for_plan(plan_tier: str, employee_code: str) -> bool:
+    """Helper to check if a specific employee_code is accessible on a given plan_tier."""
+    plan = (plan_tier or "FREE").upper()
+    
+    # Base/Infrastructure employees are always allowed
+    infra_codes = {"EMP-RSK", "EMP-PZS", "EMP-CPT", "EMP-EXP", "EMP-PTF", "EMP-PPR", "EMP-EXE", "EMP-PM"}
+    if employee_code in infra_codes:
+        return True
+        
+    if plan == "FREE":
+        # Free gets only momentum and vwap for testing
+        return employee_code in {"EMP-MOM", "EMP-VWP"}
+        
+    if plan == "SILVER":
+        # Silver gets Stocks/Equity only. Block Options and Commodity.
+        options_codes = {"EMP-PCR", "EMP-OIE", "EMP-GRK", "EMP-MPN", "EMP-OPT", "EMP-OFT", "EMP-OFL"}
+        commodity_codes = {"EMP-COM"}
+        return employee_code not in options_codes and employee_code not in commodity_codes
+        
+    if plan == "GOLD":
+        # Gold gets Stocks + Options. Block Commodity and advanced news/sentiment/institutional.
+        commodity_codes = {"EMP-COM"}
+        advanced_codes = {"EMP-NWS", "EMP-CAL", "EMP-EVR", "EMP-SME", "EMP-LQD", "EMP-OFL"}
+        return employee_code not in commodity_codes and employee_code not in advanced_codes
+        
+    if plan == "PLATINUM":
+        # Platinum gets everything
+        return True
+        
+    return False
+
+
 class EmployeeManager:
     """Manages profile lists, SaaS tenant routing, state controls, and trade histories."""
     def __init__(self) -> None:
@@ -115,9 +147,12 @@ class EmployeeManager:
     def get_profile(self, code: str) -> Optional[EmployeeProfile]:
         return self.profiles.get(code)
 
-    def get_profiles_by_tenant(self, tenant_id: Optional[str] = None) -> List[EmployeeProfile]:
-        """Provides SaaS/multi-tenant support by filtering profiles by tenant ID."""
-        return [p for p in self.profiles.values() if p.tenant_id == tenant_id]
+    def get_profiles_by_tenant(self, tenant_id: Optional[str] = None, plan_tier: Optional[str] = None) -> List[EmployeeProfile]:
+        """Provides SaaS/multi-tenant support by filtering profiles by tenant ID and subscription plan."""
+        raw_profiles = [p for p in self.profiles.values() if p.tenant_id == tenant_id or p.tenant_id is None]
+        if plan_tier:
+            return [p for p in raw_profiles if is_employee_allowed_for_plan(plan_tier, p.employee_code)]
+        return raw_profiles
 
     async def set_employee_state(self, code: str, state: EmployeeState) -> bool:
         """Transitions state and publishes activation/pause notifications."""

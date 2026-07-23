@@ -106,6 +106,7 @@ class OptionContract(BaseModel):
     volume:       float = 0.0
     open_interest: float = 0.0
     greeks:       OptionGreeks = Field(default_factory=OptionGreeks)
+    symbol:       Optional[str] = None
 
 class OptionChain(BaseModel):
     underlying:       str

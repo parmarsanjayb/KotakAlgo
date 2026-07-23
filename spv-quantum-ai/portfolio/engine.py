@@ -25,9 +25,24 @@ class PortfolioEngine:
         self.exposure_calc = ExposureCalculator()
         self.publisher = PortfolioPublisher()
         
-        self.summary = PortfolioSummary()
+        self.summaries: Dict[str, PortfolioSummary] = {}
         self._running = False
         self._lock = asyncio.Lock()
+
+    @property
+    def summary(self) -> PortfolioSummary:
+        """Fallback property for backwards compatibility with single-tenant code."""
+        return self.get_summary("admin")
+
+    @summary.setter
+    def summary(self, val: PortfolioSummary) -> None:
+        """Fallback setter."""
+        self.summaries["admin"] = val
+
+    def get_summary(self, user_id: str = "admin") -> PortfolioSummary:
+        if user_id not in self.summaries:
+            self.summaries[user_id] = PortfolioSummary()
+        return self.summaries[user_id]
 
     async def start(self) -> None:
         if self._running:
@@ -50,6 +65,7 @@ class PortfolioEngine:
             # Extract order details
             # Can be nested under "order" if published by execution_engine
             order_data = payload.get("order", payload)
+            user_id = order_data.get("user_id", "admin")
             
             symbol = order_data.get("symbol", "UNKNOWN")
             side = order_data.get("side", "BUY")
@@ -60,7 +76,7 @@ class PortfolioEngine:
                 return
 
             # Update position
-            pos, action = await self.positions.update_on_fill(symbol, side, qty, price)
+            pos, action = await self.positions.update_on_fill(symbol, side, qty, price, user_id=user_id)
             if pos and order_data.get("order_id") is not None:
                 from charges import charges_engine
                 order_id = order_data.get("order_id")
@@ -76,27 +92,31 @@ class PortfolioEngine:
                     await self.publisher.publish_position_closed(pos)
             
             # Recalculate portfolio-level summaries
-            await self.recalculate_summary()
+            await self.recalculate_summary(user_id=user_id)
         except Exception as e:
             logger.error("Error processing order filled in PortfolioEngine", error=str(e))
 
     async def _on_tick(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            symbol = payload.get("symbol")
-            ltp = float(payload.get("ltp", 0.0))
-            
+            # "tick" events are published as TickEvent{event_id, tick: MarketData},
+            # not a flat {symbol, ltp} dict — reading those keys at the top level
+            # always missed, so this handler never actually ran and every
+            # position's LTP stayed frozen at its fill price forever.
+            tick = event.payload.get("tick", event.payload)
+            symbol = tick.get("symbol")
+            ltp = float(tick.get("ltp", 0.0))
+
             if not symbol or ltp <= 0:
                 return
                 
-            pos = await self.positions.update_ltp(symbol, ltp)
-            if pos:
-                # Recalculate summaries on price update
-                await self.recalculate_summary()
+            updated_positions = await self.positions.update_ltp(symbol, ltp)
+            for pos in updated_positions:
+                # Recalculate summaries on price update for each user holding the symbol
+                await self.recalculate_summary(user_id=pos.user_id)
         except Exception as e:
             logger.error("Error processing tick in PortfolioEngine", error=str(e))
 
-    async def recalculate_summary(self) -> PortfolioSummary:
+    async def recalculate_summary(self, user_id: str = "admin") -> PortfolioSummary:
         """
         Compiles the capital allocations, positions PNLs, and exposures.
         """
@@ -116,7 +136,7 @@ class PortfolioEngine:
                 logger.error("Failed to query broker balance in PortfolioEngine", error=str(e))
 
             # 2. Get all positions
-            all_pos = await self.positions.get_all_positions()
+            all_pos = await self.positions.get_all_positions(user_id=user_id)
 
             # 3. Calculate PNL
             realized, unrealized, mtm = self.pnl_mgr.calculate_pnl(all_pos)
@@ -127,7 +147,7 @@ class PortfolioEngine:
             # 5. Build Summary
             broker_dist = {broker_name: 100.0} if exposure > 0 else {}
             
-            self.summary = PortfolioSummary(
+            summary = PortfolioSummary(
                 realized_pnl=realized,
                 unrealized_pnl=unrealized,
                 mtm=mtm,
@@ -138,9 +158,11 @@ class PortfolioEngine:
                 sector_distribution=sector_dist,
                 broker_distribution=broker_dist
             )
+            
+            self.summaries[user_id] = summary
 
             # 6. Publish Events
-            await self.publisher.publish_portfolio_updated(self.summary)
+            await self.publisher.publish_portfolio_updated(summary)
             await self.publisher.publish_pnl_updated(realized, unrealized, mtm)
             await self.publisher.publish_exposure_updated(exposure, segment_dist)
 
@@ -150,6 +172,7 @@ class PortfolioEngine:
                 event_type="portfolio_update",
                 source_agent="portfolio_engine",
                 payload={
+                    "user_id": user_id,
                     "equity": capital_val,
                     "realized_pnl": realized,
                     "drawdown_percent": 0.0,  # Calculated dynamically by drawdown_mgr
@@ -157,7 +180,7 @@ class PortfolioEngine:
                 }
             ))
 
-            return self.summary
+            return summary
 
 # Singleton
 portfolio_engine = PortfolioEngine()

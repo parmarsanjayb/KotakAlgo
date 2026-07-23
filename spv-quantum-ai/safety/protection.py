@@ -88,8 +88,10 @@ class ProtectionManager:
         entry = sl_data["entry_price"]
         sl_price = sl_data["sl_price"]
         
-        # Trailing/protection parameters from config
-        trailing_pct = float(self.config.get("trailing_stop_pct", 1.0))
+        # Trailing/protection parameters from config.
+        # trailing width is VOLATILITY-ADAPTIVE (ATR-based) with a safe fixed fallback.
+        fixed_trail = float(self.config.get("trailing_stop_pct", 1.0))
+        trailing_pct = await self._adaptive_trail_pct(symbol, entry, fixed_trail)
         be_shift_pct = float(self.config.get("break_even_shift_pct", 1.5))
         profit_lock_pct = float(self.config.get("profit_lock_pct", 3.0))
 
@@ -168,6 +170,31 @@ class ProtectionManager:
                         logger.info(f"Profit lock triggered for {symbol}: SL moved to locked profit level {locked_sl:.2f}")
                         await self.publisher.publish_trailing_updated(symbol, sl_price, locked_sl, ltp, "Profit Lock")
                     sl_data["profit_locked"] = True
+
+    async def _adaptive_trail_pct(self, symbol: str, entry: float, fallback_pct: float) -> float:
+        """Volatility-adaptive trailing width = atr_trail_mult x ATR% , clamped to
+        [trail_pct_min, trail_pct_max]. This is the 'employee-decided' trail: wider
+        stop for volatile names (avoid whipsaw), tighter for calm ones. If ATR is
+        unavailable, or adaptive_trailing is off, it safely falls back to the fixed
+        configured percentage — so trailing never breaks."""
+        if not bool(self.config.get("adaptive_trailing", True)):
+            return fallback_pct
+        try:
+            from indicators.engine import indicator_engine
+            from market.models import Timeframe
+            res = await indicator_engine.cache.get_latest(symbol, Timeframe.D1, "ATR")
+            if res is None or entry <= 0:
+                return fallback_pct
+            atr = res.value
+            if not isinstance(atr, (int, float)) or atr <= 0:
+                return fallback_pct
+            atr_pct = atr / entry * 100.0
+            mult = float(self.config.get("atr_trail_mult", 2.5))
+            lo = float(self.config.get("trail_pct_min", 3.0))
+            hi = float(self.config.get("trail_pct_max", 12.0))
+            return max(lo, min(hi, mult * atr_pct))
+        except Exception:
+            return fallback_pct
 
     async def _trigger_market_exit(self, symbol: str, side: OrderSide, qty: float, trigger_price: float, exit_price: float, msg: str) -> None:
         logger.warning(f"HIDDEN STOP-LOSS TRIGGERED: {symbol} | side: {side} | qty: {qty} | trigger: {trigger_price}")

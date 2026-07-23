@@ -1,0 +1,125 @@
+From feaf9d8b9ec796b869ce029ba7f0fdb11e648943 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 14:15:01 +0000
+Subject: [PATCH 2/7] Fix bugs blocking automatic paper trades end-to-end
+
+Verified the full pipeline live (uvicorn + mock feed) and found the automatic
+trade path was silently broken in three more places beyond the earlier wiring
+fix:
+
+- config/settings.yaml: market_analyst_agent was discovered by the agent
+  registry but never listed under agents:, so it was never instantiated. It is
+  the only producer of "candle" -> "market_analysis" events, so decision
+  scoring's market_analysis component was always 0/missing.
+- scoring/engine.py: RiskEngine.get_dashboard_metrics() reports system health
+  as OPERATIONAL/RESTRICTED, but the confidence calculator and ChiefDecisionAgent
+  expect the ALLOW/BLOCK/REDUCE_POSITION vocabulary RiskEngine.validate_order()
+  uses. The mismatch meant the risk component of every decision score was always
+  read as blocked, capping confidence and forcing every decision into BLOCKED.
+- scoring/models.py + scoring/engine.py: DecisionScoreResult never carried a
+  risk_status or recommended_strategy field, even though ChiefDecisionAgent's
+  ConflictResolver and ApprovalManager both read score_data["risk_status"] to
+  gate approval. The field was always absent, so both always fell back to their
+  (different, both wrong) hardcoded defaults. Added the field and populated it
+  from the (now-translated) risk status computed in evaluate_decision().
+
+With these fixes the live pipeline now reaches Chief Decision: MANUAL_REVIEW
+with "All checks passed successfully" (previously stuck at REJECTED/BLOCKED),
+confirming Scanner -> Decision Score -> Chief Decision -> Risk are correctly
+wired end-to-end. Full auto-approval (>=80% confidence) additionally requires
+a genuinely trending regime (ADX needs 28 M1 candles to warm up), which is
+expected market-data warm-up time, not a bug.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/config/settings.yaml         |  2 ++
+ spv-quantum-ai/scoring/engine.py            |  7 ++++++-
+ spv-quantum-ai/scoring/models.py            |  2 ++
+ spv-quantum-ai/tests/test_scoring_engine.py | 19 +++++++++++++++++++
+ 4 files changed, 29 insertions(+), 1 deletion(-)
+
+diff --git a/spv-quantum-ai/config/settings.yaml b/spv-quantum-ai/config/settings.yaml
+index 9307afd..e066aa1 100644
+--- a/spv-quantum-ai/config/settings.yaml
++++ b/spv-quantum-ai/config/settings.yaml
+@@ -8,6 +8,8 @@ agents:
+   market_agent:
+     enabled: true
+     tick_interval_ms: 1000
++  market_analyst_agent:
++    enabled: true
+   market_intelligence_agent:
+     enabled: true
+   risk_agent:
+diff --git a/spv-quantum-ai/scoring/engine.py b/spv-quantum-ai/scoring/engine.py
+index eb774c0..3b59cf2 100644
+--- a/spv-quantum-ai/scoring/engine.py
++++ b/spv-quantum-ai/scoring/engine.py
+@@ -89,10 +89,13 @@ class DecisionScoringEngine:
+             regime_val = r_reg.market_regime.value
+ 
+         # Risk
++        # RiskEngine.get_dashboard_metrics() reports OPERATIONAL/RESTRICTED (system-wide
++        # health), which must be translated to the ALLOW/BLOCK vocabulary the confidence
++        # calculator expects (the same vocabulary RiskEngine.validate_order() returns).
+         risk_status = "BLOCK"
+         try:
+             risk_metrics = await risk_engine.get_dashboard_metrics()
+-            risk_status = risk_metrics.get("risk_status", "BLOCK")
++            risk_status = "ALLOW" if risk_metrics.get("risk_status") == "OPERATIONAL" else "BLOCK"
+         except Exception:
+             pass
+ 
+@@ -138,6 +141,8 @@ class DecisionScoringEngine:
+             timeframe=timeframe.value,
+             overall_confidence=conf_score,
+             component_scores=comp_scores,
++            risk_status=risk_status,
++            recommended_strategy=(report.recommended_strategy if report else None),
+             decision_quality=quality,
+             missing_requirements=missing_reqs,
+             conflicting_signals=conflicts,
+diff --git a/spv-quantum-ai/scoring/models.py b/spv-quantum-ai/scoring/models.py
+index 2be6eed..de7f97a 100644
+--- a/spv-quantum-ai/scoring/models.py
++++ b/spv-quantum-ai/scoring/models.py
+@@ -16,6 +16,8 @@ class DecisionScoreResult(BaseModel):
+     timeframe: str
+     overall_confidence: float               # 0.0 - 100.0
+     component_scores: Dict[str, float]      # name -> raw or weighted score
++    risk_status: str                        # ALLOW, BLOCK, REDUCE_POSITION
++    recommended_strategy: Optional[str]     = None
+     decision_quality: DecisionQuality
+     missing_requirements: List[str]         = Field(default_factory=list)
+     conflicting_signals: List[str]          = Field(default_factory=list)
+diff --git a/spv-quantum-ai/tests/test_scoring_engine.py b/spv-quantum-ai/tests/test_scoring_engine.py
+index dbce721..accb4cd 100644
+--- a/spv-quantum-ai/tests/test_scoring_engine.py
++++ b/spv-quantum-ai/tests/test_scoring_engine.py
+@@ -212,3 +212,22 @@ async def test_decision_scoring_engine_scanner_match_integration():
+     await event_bus.unsubscribe("decision_score", cb)
+     await event_bus.stop()
+ 
++
++@pytest.mark.asyncio
++async def test_evaluate_decision_translates_risk_engine_vocabulary():
++    """RiskEngine.get_dashboard_metrics() reports OPERATIONAL/RESTRICTED (system-wide
++    health), not the ALLOW/BLOCK/REDUCE_POSITION vocabulary used elsewhere in risk
++    decisions. evaluate_decision() must translate it and expose the translated value
++    on DecisionScoreResult.risk_status so downstream consumers (ChiefDecisionAgent)
++    never see the raw dashboard vocabulary."""
++    engine = DecisionScoringEngine()
++
++    result = await engine.evaluate_decision("WIPRO", Timeframe.M1)
++
++    assert result.risk_status in ("ALLOW", "BLOCK")
++    assert result.component_scores["risk_status"] in (0.0, 60.0, 100.0)
++    if result.risk_status == "ALLOW":
++        assert result.component_scores["risk_status"] == 100.0
++    else:
++        assert result.component_scores["risk_status"] == 0.0
++
+-- 
+2.43.0
+

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from agents.chief_decision_agent import ChiefDecisionAgent, ApprovalManager, ConflictResolver
 from core.bus import event_bus, EventModel
 from portfolio.engine import portfolio_engine
+from portfolio.models import Position
 
 # ── Component Validation Tests ────────────────────────────────────────────────
 
@@ -48,6 +49,50 @@ async def test_approval_manager_checks():
     assert code == "CONFIDENCE_TOO_LOW"
 
 
+@pytest.mark.asyncio
+async def test_approval_manager_rejects_sell_with_no_open_position():
+    """A SIGNAL_SELL exit with nothing open to close must be rejected —
+    this system doesn't support naked shorting."""
+    mgr = ApprovalManager()
+    mgr.reset_daily_trades()
+    async with portfolio_engine.positions._lock:
+        portfolio_engine.positions._positions.clear()
+
+    state, code, desc = await mgr.validate_checks({
+        "symbol": "TCS", "overall_confidence": 75.0, "risk_status": "ALLOW", "side": "SELL",
+    })
+    assert state == "REJECTED"
+    assert code == "NO_POSITION_TO_CLOSE"
+
+
+@pytest.mark.asyncio
+async def test_approval_manager_allows_sell_close_bypassing_position_and_capital_limits():
+    """A SELL that closes an existing position must be approved even when
+    the position-count/capital checks would otherwise block a new BUY —
+    closing a position reduces risk, it shouldn't be blocked by the same
+    limits meant to cap new exposure."""
+    mgr = ApprovalManager()
+    mgr.reset_daily_trades()
+    mgr.max_open_positions = 1
+    async with portfolio_engine.positions._lock:
+        portfolio_engine.positions._positions.clear()
+        portfolio_engine.positions._positions["spvquantam"] = {
+            "TCS": Position(
+                symbol="TCS", segment="Equity", side="BUY", quantity=7.0, avg_price=3500.0, user_id="spvquantam"
+            )
+        }
+    portfolio_engine.summary.available_capital = 0.0  # would block a BUY
+
+    state, code, desc = await mgr.validate_checks({
+        "symbol": "TCS", "overall_confidence": 75.0, "risk_status": "ALLOW", "side": "SELL",
+    })
+    assert state == "APPROVED"
+    assert code == "SUCCESS"
+
+    async with portfolio_engine.positions._lock:
+        portfolio_engine.positions._positions.clear()
+
+
 def test_conflict_resolver():
     resolver = ConflictResolver()
     assert resolver.resolve(85.0, "ALLOW") == "APPROVED"
@@ -60,6 +105,11 @@ def test_conflict_resolver():
 
 @pytest.mark.asyncio
 async def test_chief_decision_agent_integration():
+    # Clear existing subscribers to ensure test isolation
+    async with event_bus._lock:
+        event_bus._subscribers.clear()
+        event_bus._global_subscribers.clear()
+
     event_bus.start()
     
     agent = ChiefDecisionAgent()
@@ -75,24 +125,6 @@ async def test_chief_decision_agent_integration():
     portfolio_engine.summary.available_capital = 100000.0
     async with portfolio_engine.positions._lock:
         portfolio_engine.positions._positions.clear()
-
-    # Mock employee engine state for RELIANCE
-    from employees import employee_engine
-    employee_engine.trend_intelligence.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.volume_intelligence.latest_results["RELIANCE"] = {"confirmation_status": "CONFIRM", "confidence": 80.0}
-    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
-
-    employee_engine.vwap_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.momentum.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.liquidity.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.oi_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.pcr_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.greeks.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-    employee_engine.option_flow.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 80.0}
-
-    employee_engine.news_emp.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 70.0}
-    employee_engine.calendar.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 70.0}
-    employee_engine.event_risk.latest_results["RELIANCE"] = {"recommendation": "BUY", "confidence": 70.0}
 
     # Track events
     approved_events = []
@@ -141,39 +173,70 @@ async def test_chief_decision_agent_integration():
     await event_bus.stop()
 
 
-def test_chief_decision_agent_ceo_logic():
+@pytest.mark.asyncio
+async def test_chief_decision_agent_routes_through_risk_before_execution():
+    """Approved decisions must be routed via order_request (Risk Agent) rather than
+    being sent straight to order_approved (Execution Agent), so the Risk step in the
+    Market Feed -> Scanner -> Decision Score -> Chief Decision -> Risk -> Execution
+    pipeline is not bypassed."""
+    # Clear existing subscribers to ensure test isolation
+    async with event_bus._lock:
+        event_bus._subscribers.clear()
+        event_bus._global_subscribers.clear()
+
+    event_bus.start()
+
     agent = ChiefDecisionAgent()
-    from employees import employee_engine
-    
-    # Test case 1: Mandatory Trend Fail
-    employee_engine.trend_intelligence.latest_results["TCS"] = {"recommendation": "SELL", "confidence": 80.0}  # Sell trend on Buy request
-    employee_engine.volume_intelligence.latest_results["TCS"] = {"confirmation_status": "CONFIRM", "confidence": 80.0}
-    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
+    await agent.start()
 
-    decision = agent._evaluate_ceo_decision("TCS", "BUY", "ALLOW")
-    assert decision["mandatory_passed"] is False
-    assert "Trend Employee reject" in decision["reason"]
+    agent.approved_queue.clear()
+    agent.coordinator.reset_daily_trades()
 
-    # Test case 2: Weighted calculations
-    # Trend, Volume, Risk pass
-    employee_engine.trend_intelligence.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 90.0}
-    employee_engine.volume_intelligence.latest_results["TCS"] = {"confirmation_status": "CONFIRM", "confidence": 80.0}
-    employee_engine.risk_emp.latest_results["SYSTEM"] = {"recommendation": "BUY", "confidence": 90.0}
+    portfolio_engine.summary.available_capital = 100000.0
+    async with portfolio_engine.positions._lock:
+        portfolio_engine.positions._positions.clear()
 
-    # All weighted employees recommend BUY
-    for emp in [employee_engine.vwap_emp, employee_engine.momentum, employee_engine.liquidity, 
-                employee_engine.oi_emp, employee_engine.pcr_emp, employee_engine.greeks, employee_engine.option_flow]:
-        emp.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 80.0}
+    order_requests = []
+    order_approved_events = []
 
-    # Advisory employees
-    employee_engine.news_emp.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 70.0}
-    employee_engine.calendar.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 70.0}
-    employee_engine.event_risk.latest_results["TCS"] = {"recommendation": "BUY", "confidence": 70.0}
+    async def on_order_request(evt: EventModel):
+        order_requests.append(evt)
 
-    decision2 = agent._evaluate_ceo_decision("TCS", "BUY", "ALLOW")
-    assert decision2["mandatory_passed"] is True
-    # Weighted score = sum(weight * 80.0) = 80.0. News/Calendar add +10%. Clamped at 90.0% confidence.
-    assert decision2["confidence"] == 90.0
-    assert decision2["risk"] == "LOW"
-    assert decision2["consensus"] == 100.0  # 10/10 employees agree
+    async def on_order_approved(evt: EventModel):
+        order_approved_events.append(evt)
 
+    await event_bus.subscribe("order_request", on_order_request)
+    await event_bus.subscribe("order_approved", on_order_approved)
+
+    await event_bus.publish(EventModel(
+        source_agent="decision_scoring_engine",
+        event_type="decision_score",
+        payload={
+            "symbol": "HDFCBANK",
+            "overall_confidence": 90.0,
+            "risk_status": "ALLOW",
+            "recommended_strategy": "ema_crossover",
+            "side": "BUY",
+            "quantity": 5.0,
+            "price": 1600.0
+        }
+    ))
+
+    for _ in range(20):
+        if len(order_requests) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert len(order_requests) == 1
+    assert order_requests[0].payload["symbol"] == "HDFCBANK"
+    # The Chief Decision Agent must not publish order_approved directly - only the
+    # Risk Agent is allowed to do that after validating the order_request.
+    assert len(order_approved_events) == 0
+
+    # The agent must not crash while building its AgentResultModel.
+    assert agent.status == "RUNNING"
+
+    await agent.stop()
+    await event_bus.unsubscribe("order_request", on_order_request)
+    await event_bus.unsubscribe("order_approved", on_order_approved)
+    await event_bus.stop()

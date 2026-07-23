@@ -50,6 +50,8 @@ class Position(BaseModel):
     unrealised_pnl:   float = 0.0
     realised_pnl:     float = 0.0
     broker:           str = ""
+    stop_loss:        Optional[float] = None
+    target:           Optional[float] = None
 
 class Holding(BaseModel):
     symbol:           str

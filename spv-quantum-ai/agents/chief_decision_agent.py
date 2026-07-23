@@ -2,7 +2,10 @@ import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 import uuid
+
+_IST = ZoneInfo("Asia/Kolkata")
 
 from core.agent import BaseAgent, AgentResultModel
 from core.bus import event_bus, EventModel
@@ -11,7 +14,6 @@ from core.logging import get_logger
 from portfolio.engine import portfolio_engine
 from risk.engine import risk_engine
 from scoring.engine import decision_scoring_engine
-from employees import employee_engine
 
 logger = get_logger("chief_decision_agent")
 
@@ -24,9 +26,29 @@ class ConflictResolver:
             return "REJECTED"
         if decision_score < 50.0:
             return "REJECTED"
-        if decision_score >= 80.0 and risk_status == "ALLOW":
+            
+        # Dynamically load the minimum confidence threshold from the weight manager config (fallback to 70.0)
+        threshold = 70.0
+        try:
+            threshold = decision_scoring_engine.wm.min_confidence_threshold
+        except Exception:
+            pass
+            
+        if decision_score >= threshold and risk_status == "ALLOW":
             return "APPROVED"
         return "MANUAL_REVIEW"
+
+
+def get_segment_from_symbol(symbol: str) -> str:
+    """Classifies a symbol into Equity, Options, or Commodity."""
+    sym = symbol.upper()
+    commodities = {"GOLD", "SILVER", "CRUDEOIL", "NATURALGAS", "COPPER", "ZINC", "LEAD", "ALUMINI"}
+    if any(c in sym for c in commodities) or (sym.endswith("FUT") and not any(idx in sym for idx in {"NIFTY", "BANKNIFTY", "FINNIFTY"})):
+        return "Commodity"
+    # Options always contain digits for strike price/expiry (e.g. RELIANCE26JUL2200CE)
+    if (sym.endswith("CE") or sym.endswith("PE")) and any(char.isdigit() for char in sym):
+        return "Options"
+    return "Equity"
 
 
 class ApprovalManager:
@@ -34,42 +56,100 @@ class ApprovalManager:
     Applies mandatory criteria validation checks.
     """
     def __init__(self) -> None:
-        self.max_daily_trades = 10
+        # PAPER-TESTING PHASE (2026-07-21): deliberately permissive. The point of
+        # paper mode is to surface bugs, and bugs only appear when trades actually
+        # happen — today's exit / accidental-short / hidden-SL failures were all
+        # found *because* orders were flowing. Volume now = problems found now,
+        # before real money. TIGHTEN THESE (≈15/day, 5-min cooldown, 60% conf)
+        # before switching to a live-money broker.
+        self.max_daily_trades = 100
         self.max_open_positions = 5
         self.min_confidence = 50.0
         self._daily_trade_count = 0
+        self._trade_count_date = datetime.now(_IST).date()
 
-    async def validate_checks(self, payload: Dict[str, Any]) -> tuple[str, str, str]:
+    async def validate_checks(self, payload: Dict[str, Any], user_id: str = "spvquantam") -> tuple[str, str, str]:
         symbol = payload.get("symbol", "UNKNOWN")
         confidence = float(payload.get("overall_confidence") or payload.get("confidence") or 0.0)
         risk_status = payload.get("risk_status", "BLOCK")
+        side = payload.get("side", "BUY")
 
-        # 1. Decision Confidence Check
+        # 1. Plan/Segment Check
+        segment = get_segment_from_symbol(symbol)
+        
+        # Query user's plan tier
+        from database.connection import async_session
+        from database.models import SubscriptionModel
+        from sqlalchemy import select
+        
+        # Personal paper-trading system: default to PLATINUM so all segments
+        # (Equity, Commodity, Options) are tradable. A DB subscription, if present,
+        # still overrides this.
+        plan_tier = "PLATINUM"
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(SubscriptionModel).where(SubscriptionModel.user_id == user_id)
+                )
+                sub = result.scalars().first()
+                if sub:
+                    plan_tier = sub.plan_tier
+        except Exception:
+            pass
+            
+        if segment == "Options" and plan_tier not in ("GOLD", "PLATINUM"):
+            return "REJECTED", "PLAN_RESTRICTION", f"Options segment is not available on {plan_tier} plan."
+        if segment == "Commodity" and plan_tier != "PLATINUM":
+            return "REJECTED", "PLAN_RESTRICTION", f"Commodity segment is not available on {plan_tier} plan."
+        if plan_tier == "FREE" and segment != "Equity":
+            return "REJECTED", "PLAN_RESTRICTION", "Free trial plan only supports Equity segment."
+
+        # 2. Decision Confidence Check
         if confidence < self.min_confidence:
             return "REJECTED", "CONFIDENCE_TOO_LOW", f"Confidence {confidence}% is below threshold {self.min_confidence}%"
 
-        # 2. Risk Engine Approval
+        # 3. Risk Engine Approval
         if risk_status != "ALLOW":
             return "BLOCKED", "RISK_REJECTION", f"Risk engine returned status: {risk_status}"
 
-        # 3. Open Positions Limit
-        open_pos = len(await portfolio_engine.positions.get_open_positions())
+        # A closing SELL (exit signal against an existing long position) doesn't
+        # open new exposure, so the position-count and capital checks below
+        # only make sense for a BUY (new entry) — they'd otherwise block every
+        # exit once the account is at its position/capital limits, which is
+        # backwards: exits are exactly what should be allowed to fire then.
+        open_pos_list = await portfolio_engine.positions.get_open_positions(user_id=user_id)
+        is_open = any(p.symbol == symbol for p in open_pos_list)
+
+        if side == "SELL":
+            if not is_open:
+                return "REJECTED", "NO_POSITION_TO_CLOSE", f"No open position in {symbol} to sell/close."
+            return "APPROVED", "SUCCESS", "Exit signal approved to close existing position."
+
+        # 4. Open Positions Limit
+        open_pos = len(open_pos_list)
         if open_pos >= self.max_open_positions:
             return "REJECTED", "POSITION_LIMIT_EXCEEDED", f"Active positions {open_pos} exceed limit {self.max_open_positions}"
 
-        # 4. Capital Availability Check
-        summary = await portfolio_engine.recalculate_summary()
+        # 5. Capital Availability Check
+        summary = await portfolio_engine.recalculate_summary(user_id=user_id)
         available_capital = summary.available_capital
         if available_capital <= 0.0:
             return "REJECTED", "CAPITAL_UNAVAILABLE", "Available margin is zero or negative."
 
-        # 5. Duplicate Trade Check
-        open_pos_list = await portfolio_engine.positions.get_open_positions()
-        is_open = any(p.symbol == symbol for p in open_pos_list)
+        # 6. Duplicate Trade Check
         if is_open:
             return "REJECTED", "DUPLICATE_TRADE", f"An active position already exists for {symbol}."
 
-        # 6. Max Daily Trades Limit
+        # 7. Max Daily Trades Limit
+        # The counter lives in memory and reset_daily_trades() has no caller, so it
+        # only ever climbed: once it passed the limit, every later signal was
+        # rejected forever (a restart was the only thing that cleared it). Roll it
+        # off the IST trading date here so a new day always starts at zero.
+        today = datetime.now(_IST).date()
+        if today != self._trade_count_date:
+            self._daily_trade_count = 0
+            self._trade_count_date = today
+
         if self._daily_trade_count >= self.max_daily_trades:
             return "REJECTED", "DAILY_LIMIT_EXCEEDED", f"Daily trade limit {self.max_daily_trades} reached."
 
@@ -92,7 +172,21 @@ class DecisionPublisher:
             source_agent="chief_decision_agent",
             payload=payload
         ))
-        # Route to Risk Agent via live event loop
+
+        # MANUAL mode: hold the order for the user to confirm/reject instead
+        # of executing it immediately. Defaults to AUTO, which is the
+        # existing behavior below, unchanged.
+        from trading.mode import trading_mode_manager
+        if trading_mode_manager.get_mode() == "MANUAL":
+            trading_mode_manager.hold_for_confirmation(payload)
+            await event_bus.publish(EventModel(
+                event_type="trade_pending_confirmation",
+                source_agent="chief_decision_agent",
+                payload=payload
+            ))
+            return
+
+        # Route through the Risk Agent for final order-level validation before execution
         await event_bus.publish(EventModel(
             event_type="order_request",
             source_agent="chief_decision_agent",
@@ -100,9 +194,29 @@ class DecisionPublisher:
                 "symbol": payload["symbol"],
                 "side": payload.get("side", "BUY"),
                 "quantity": payload.get("quantity", 10.0),
-                "price": payload.get("price", 100.0),
+                # Real LTP, resolved in analyze() above — APPROVED never reaches
+                # here without one (see the NO_LIVE_PRICE guard).
+                "price": payload.get("price", 0.0),
                 "type": "LIMIT",
-                "strategy_name": payload.get("strategy_name")
+                "strategy_name": payload.get("strategy_name"),
+                "user_id": payload.get("user_id", "spvquantam")
+            }
+        ))
+
+    async def publish_confirmed_order(self, payload: Dict[str, Any]) -> None:
+        """Publishes the order_request for a MANUAL-mode decision the user
+        has explicitly confirmed. Same order shape as the AUTO path above."""
+        await event_bus.publish(EventModel(
+            event_type="order_request",
+            source_agent="chief_decision_agent",
+            payload={
+                "symbol": payload["symbol"],
+                "side": payload.get("side", "BUY"),
+                "quantity": payload.get("quantity", 10.0),
+                "price": payload.get("price", 0.0),
+                "type": "LIMIT",
+                "strategy_name": payload.get("strategy_name"),
+                "user_id": payload.get("user_id", "spvquantam")
             }
         ))
 
@@ -123,7 +237,7 @@ class DecisionPublisher:
 
 class ChiefDecisionAgent(BaseAgent):
     """
-    AI CEO & Final Decision Authority for the Trading OS.
+    Final Decision Authority for the Trading OS.
     Evaluates scoring and risk metrics, applies mandatory checks, and issues APPROVED or REJECTED statuses.
     """
     def __init__(self) -> None:
@@ -154,182 +268,6 @@ class ChiefDecisionAgent(BaseAgent):
     async def shutdown(self) -> None:
         self.log_info("ChiefDecisionAgent stopped.")
 
-    def _get_employee_recommendation(self, employee, symbol: str) -> tuple[str, float]:
-        """
-        Retrieves (recommendation, confidence) from an employee instance for the given symbol.
-        """
-        if not employee:
-            return "WAIT", 0.0
-        
-        results = getattr(employee, "latest_results", {})
-        if not results:
-            return "WAIT", 0.0
-        
-        res = results.get(symbol)
-        if not res:
-            res = results.get(symbol.upper())
-        if not res:
-            res = results.get("SYSTEM")
-        if not res:
-            try:
-                res = next(iter(results.values()))
-            except Exception:
-                res = None
-            
-        if not res:
-            return "WAIT", 0.0
-            
-        rec = res.get("recommendation") or res.get("confirmation_status") or "WAIT"
-        conf = float(res.get("confidence") or 50.0)
-        return str(rec).upper(), conf
-
-    def _evaluate_ceo_decision(self, symbol: str, side: str, risk_status: str) -> Dict[str, Any]:
-        """
-        Executes the AI CEO Weighted Decision Engine.
-        """
-        # Helper to check matching side
-        def matches_side(rec: str, trade_side: str) -> bool:
-            rec_upper = rec.upper()
-            side_upper = trade_side.upper()
-            if rec_upper == "WAIT" or rec_upper == "NEUTRAL" or rec_upper == "NO_TRADE":
-                return False
-            if side_upper == "BUY":
-                return "BUY" in rec_upper or "BULLISH" in rec_upper or "CE" in rec_upper or rec_upper == "ALLOW"
-            elif side_upper == "SELL":
-                return "SELL" in rec_upper or "BEARISH" in rec_upper or "PE" in rec_upper
-            return False
-
-        # Helper to check opposite side
-        def opposite_side(rec: str, trade_side: str) -> bool:
-            rec_upper = rec.upper()
-            side_upper = trade_side.upper()
-            if rec_upper == "WAIT" or rec_upper == "NEUTRAL" or rec_upper == "NO_TRADE":
-                return False
-            if side_upper == "BUY":
-                return "SELL" in rec_upper or "BEARISH" in rec_upper or "PE" in rec_upper
-            elif side_upper == "SELL":
-                return "BUY" in rec_upper or "BULLISH" in rec_upper or "CE" in rec_upper or rec_upper == "ALLOW"
-            return False
-
-        # 1. Evaluate Mandatory Employees
-        trend_rec, trend_conf = self._get_employee_recommendation(employee_engine.trend_intelligence, symbol)
-        vol_rec, vol_conf = self._get_employee_recommendation(employee_engine.volume_intelligence, symbol)
-        risk_rec, risk_conf = self._get_employee_recommendation(employee_engine.risk_emp, symbol)
-
-        trend_passed = matches_side(trend_rec, side)
-        vol_passed = (vol_rec == "CONFIRM" or matches_side(vol_rec, side))
-        risk_passed = (risk_status == "ALLOW" and risk_rec != "WAIT" and risk_rec != "BLOCK")
-
-        mandatory_passed = trend_passed and vol_passed and risk_passed
-        block_trade = not risk_passed
-
-        mandatory_reason = []
-        if not trend_passed:
-            mandatory_reason.append(f"Trend Employee reject ({trend_rec})")
-        if not vol_passed:
-            mandatory_reason.append(f"Volume Employee reject ({vol_rec})")
-        if not risk_passed:
-            mandatory_reason.append(f"Risk Employee block ({risk_rec}/RiskStatus:{risk_status})")
-
-        # 2. Evaluate Weighted Employees
-        weights = {
-            "vwap": (employee_engine.vwap_emp, 0.15),
-            "momentum": (employee_engine.momentum, 0.15),
-            "liquidity": (employee_engine.liquidity, 0.15),
-            "oi": (employee_engine.oi_emp, 0.10),
-            "pcr": (employee_engine.pcr_emp, 0.10),
-            "greeks": (employee_engine.greeks, 0.10),
-            "option_flow": (employee_engine.option_flow, 0.25)
-        }
-
-        weighted_score_sum = 0.0
-        weighted_breakdown = []
-        agreed_count = 0
-
-        # Count mandatory agreement
-        if trend_passed: agreed_count += 1
-        if vol_passed: agreed_count += 1
-        if risk_passed: agreed_count += 1
-
-        for name, (emp, weight) in weights.items():
-            emp_rec, emp_conf = self._get_employee_recommendation(emp, symbol)
-            
-            if matches_side(emp_rec, side):
-                score = emp_conf
-                agreed_count += 1
-            elif opposite_side(emp_rec, side):
-                score = -emp_conf
-            else:
-                score = 0.0
-
-            weighted_score_sum += weight * score
-            weighted_breakdown.append(f"{name.upper()}: {emp_rec} ({emp_conf:.1f}% -> weight impact: {weight*score:.1f}%)")
-
-        # 3. Evaluate Advisory Employees
-        news_rec, news_conf = self._get_employee_recommendation(employee_engine.news_emp, symbol)
-        cal_rec, cal_conf = self._get_employee_recommendation(employee_engine.calendar, symbol)
-        evt_rec, evt_conf = self._get_employee_recommendation(employee_engine.event_risk, symbol)
-
-        advisory_adjustment = 0.0
-        advisory_breakdown = []
-
-        if matches_side(news_rec, side):
-            advisory_adjustment += 5.0
-            advisory_breakdown.append("News: BULLISH bonus (+5.0%)")
-        elif opposite_side(news_rec, side):
-            advisory_adjustment -= 5.0
-            advisory_breakdown.append("News: BEARISH penalty (-5.0%)")
-
-        if matches_side(cal_rec, side):
-            advisory_adjustment += 5.0
-            advisory_breakdown.append("Calendar: High-match bonus (+5.0%)")
-        elif opposite_side(cal_rec, side):
-            advisory_adjustment -= 5.0
-            advisory_breakdown.append("Calendar: Contrary-match penalty (-5.0%)")
-
-        if evt_rec == "WAIT" or opposite_side(evt_rec, side):
-            advisory_adjustment -= 10.0
-            advisory_breakdown.append("Event Risk: Alert penalty (-10.0%)")
-
-        # Final calculations
-        final_confidence = max(0.0, min(100.0, weighted_score_sum + advisory_adjustment))
-        consensus_pct = (agreed_count / 10.0) * 100.0
-
-        # Risk designation
-        if block_trade or not mandatory_passed:
-            risk_level = "HIGH"
-        elif consensus_pct >= 75.0 and final_confidence >= 75.0:
-            risk_level = "LOW"
-        else:
-            risk_level = "MEDIUM"
-
-        # Construct Reason
-        reason_parts = []
-        if mandatory_passed:
-            reason_parts.append("Mandatory employees approved.")
-        else:
-            reason_parts.append(f"Mandatory employee check failed: {', '.join(mandatory_reason)}.")
-
-        reason_parts.append("Weighted votes: [" + ", ".join(weighted_breakdown) + "]")
-        if advisory_breakdown:
-            reason_parts.append("Advisory feedback: [" + ", ".join(advisory_breakdown) + "]")
-        
-        reason_parts.append(f"Calculated Weighted Score: {weighted_score_sum:.1f}%.")
-        reason_parts.append(f"Advisory Adjustments: {advisory_adjustment:+.1f}%.")
-        reason_parts.append(f"CEO Consensus: {consensus_pct:.1f}% agreement ({agreed_count}/10 employees).")
-        reason_parts.append(f"Calculated CEO Confidence: {final_confidence:.1f}% | Risk: {risk_level}.")
-
-        reason = " ".join(reason_parts)
-
-        return {
-            "confidence": round(final_confidence, 2),
-            "risk": risk_level,
-            "consensus": round(consensus_pct, 2),
-            "reason": reason,
-            "mandatory_passed": mandatory_passed,
-            "block_trade": block_trade
-        }
-
     async def analyze(self, event: EventModel) -> Optional[AgentResultModel]:
         if event.event_type != "decision_score":
             return None
@@ -337,45 +275,58 @@ class ChiefDecisionAgent(BaseAgent):
         start_time = time.perf_counter()
         score_data = event.payload.get("decision_score", event.payload)
         symbol = score_data.get("symbol", "UNKNOWN")
-        side = score_data.get("side", "BUY")
+        confidence = float(score_data.get("overall_confidence", 0.0))
         risk_status = score_data.get("risk_status", "ALLOW")
         strategy_name = score_data.get("recommended_strategy", "trend_strategy")
 
-        async with self._lock:
-            # 1. Run AI CEO Weighted Decision Engine
-            ceo_eval = self._evaluate_ceo_decision(symbol, side, risk_status)
-            confidence = ceo_eval["confidence"]
+        # The strategy engine's exit_rules (Death Cross etc.) produce
+        # SIGNAL_SELL; anything else defaults to BUY as before.
+        strategy_action = score_data.get("strategy_action", "SIGNAL_NONE")
+        side = "SELL" if strategy_action == "SIGNAL_SELL" else "BUY"
+        user_id = score_data.get("user_id", "spvquantam")
 
-            # 2. Determine state and detailed checks
-            if ceo_eval["block_trade"]:
-                state = "BLOCKED"
-                code = "RISK_REJECTION"
-                explanation = ceo_eval["reason"]
-            elif not ceo_eval["mandatory_passed"]:
-                state = "REJECTED"
-                code = "MANDATORY_EMPLOYEE_FAILURE"
-                explanation = ceo_eval["reason"]
-            else:
-                # Copy score data and override confidence with CEO confidence
-                score_data_copy = dict(score_data)
-                score_data_copy["confidence"] = confidence
-                score_data_copy["overall_confidence"] = confidence
-                
-                chk_state, code, explanation = await self.coordinator.validate_checks(score_data_copy)
+        async with self._lock:
+            # 1. Resolve primary conflicts
+            state = self.resolver.resolve(confidence, risk_status)
+
+            # 2. Run detailed mandatory checks
+            if state != "REJECTED":
+                chk_state, code, explanation = await self.coordinator.validate_checks({**score_data, "side": side}, user_id=user_id)
                 if chk_state != "APPROVED":
                     state = chk_state
-                    explanation = f"{explanation} [CEO explanation: {ceo_eval['reason']}]"
                 else:
                     state = "APPROVED"
-                    explanation = ceo_eval["reason"]
+                    code = "APPROVED"
+                    explanation = "All checks passed successfully."
+            else:
+                code = "CONFIDENCE_OR_RISK_FAILURE"
+                explanation = f"Confidence {confidence}% or risk status {risk_status} rejected."
 
-            # Resolve actual price and quantity dynamically
-            from market.manager import market_data_manager
-            tick = await market_data_manager.cache.get_tick(symbol)
-            price = tick.ltp if tick else score_data.get("price", 100.0)
-            qty = score_data.get("quantity")
-            if not qty:
-                qty = 0.1 if price > 1000.0 else 10.0
+            # Resolve the real, current market price. DecisionScoreResult never
+            # carries a price (scoring is price-agnostic), so this used to fall
+            # back to a hardcoded 100.0 — silently mispricing every approved
+            # order regardless of the instrument's real value. An order this
+            # engine can't price correctly must never be approved.
+            live_price = score_data.get("price")
+            if not live_price:
+                from market.manager import market_data_manager
+                live_price = await market_data_manager.get_ltp(symbol)
+
+            if state == "APPROVED" and not live_price:
+                state = "REJECTED"
+                code = "NO_LIVE_PRICE"
+                explanation = f"No live Kotak Neo price available for {symbol}; refusing to approve an unpriced order."
+                self.log_warning(f"Chief Decision: rejecting {symbol} — no live LTP available.")
+
+            # A SELL is an exit against an existing position — close the
+            # actual held quantity, not a default entry-sizing quantity
+            # (which has no relationship to what's currently open).
+            quantity = score_data.get("quantity", 10.0)
+            if side == "SELL":
+                open_positions = await portfolio_engine.positions.get_open_positions(user_id=user_id)
+                existing = next((p for p in open_positions if p.symbol == symbol), None)
+                if existing:
+                    quantity = existing.quantity
 
             # Build record payload
             record = {
@@ -383,20 +334,23 @@ class ChiefDecisionAgent(BaseAgent):
                 "symbol": symbol,
                 "strategy_name": strategy_name,
                 "confidence": confidence,
-                "risk": ceo_eval["risk"],
-                "consensus": ceo_eval["consensus"],
                 "status": state,
                 "reason_code": code,
                 "explanation": explanation,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "side": side,
-                "quantity": qty,
-                "price": price
+                "quantity": quantity,
+                "price": live_price or 0.0,
+                "user_id": user_id,
             }
 
             # 3. Publish and Queue
             if state == "APPROVED":
-                self.coordinator.increment_daily_trades()
+                if side == "BUY":
+                    # The daily-trade cap is a new-entry throttle; closing an
+                    # existing position isn't a fresh speculative trade and
+                    # shouldn't eat into that budget.
+                    self.coordinator.increment_daily_trades()
                 self.approved_queue.append(record)
                 await self.publisher.publish_approved(record)
             elif state == "BLOCKED":
@@ -408,12 +362,11 @@ class ChiefDecisionAgent(BaseAgent):
 
             self.log_info(f"Chief Decision: {state} for symbol {symbol} | Reason: {explanation}")
             
-            processing_time = (time.perf_counter() - start_time) * 1000.0
             return AgentResultModel(
                 agent_name=self.agent_name,
                 signal=state,
                 confidence=confidence,
                 reason=explanation,
-                processing_time=processing_time,
+                processing_time=(time.perf_counter() - start_time) * 1000.0,
                 metadata=record
             )

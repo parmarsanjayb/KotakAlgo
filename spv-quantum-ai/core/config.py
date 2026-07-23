@@ -25,6 +25,26 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: Optional[str] = None
     TELEGRAM_CHAT_ID: Optional[str] = None
 
+    # NewsAPI.org — free developer key powers the News Department employee.
+    # Get one at https://newsapi.org/register . When unset, NewsEmployee stays
+    # in a neutral WAIT state instead of emitting fabricated signals.
+    NEWSAPI_KEY: Optional[str] = None
+
+    # Dashboard HTTP Basic Auth — required before exposing this to any public
+    # network. The app can place/cancel real orders; BasicAuthMiddleware fails
+    # closed (blocks everything) if DASHBOARD_PASSWORD is unset.
+    DASHBOARD_USERNAME: str = "admin"
+    DASHBOARD_PASSWORD: Optional[str] = None
+    JWT_SECRET_KEY: str = "spv-quantum-ai-super-secret-key-change-this-in-production"
+
+    # Kotak Neo Trade API (live market data feed — TOTP + MPIN login)
+    KOTAK_NEO_CONSUMER_KEY: Optional[str] = None
+    KOTAK_NEO_ENVIRONMENT: str = "prod"
+    KOTAK_NEO_MOBILE_NUMBER: Optional[str] = None
+    KOTAK_NEO_UCC: Optional[str] = None
+    KOTAK_NEO_MPIN: Optional[str] = None
+    KOTAK_NEO_TOTP_SECRET: Optional[str] = None
+
     # Holds configurations loaded from YAML file
     yaml_config: Dict[str, Any] = Field(default_factory=dict)
 

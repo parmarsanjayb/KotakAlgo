@@ -38,11 +38,14 @@ class DecisionScoringEngine:
         self._running = True
         # Evaluate automatically when new market analysis reports are published
         await event_bus.subscribe("market_analysis", self._on_market_analysis)
-        logger.info("DecisionScoringEngine started and subscribed to market_analysis events.")
+        # Evaluate automatically when the Scanner surfaces a new opportunity
+        await event_bus.subscribe("scanner_match", self._on_scanner_match)
+        logger.info("DecisionScoringEngine started and subscribed to market_analysis and scanner_match events.")
 
     async def stop(self) -> None:
         self._running = False
         await event_bus.unsubscribe("market_analysis", self._on_market_analysis)
+        await event_bus.unsubscribe("scanner_match", self._on_scanner_match)
         logger.info("DecisionScoringEngine stopped.")
 
     async def _on_market_analysis(self, event: EventModel) -> None:
@@ -55,6 +58,18 @@ class DecisionScoringEngine:
             await self.evaluate_decision(report.symbol, tf, report)
         except Exception as e:
             logger.error("Error processing market analysis event in DecisionScoringEngine", error=str(e))
+
+    async def _on_scanner_match(self, event: EventModel) -> None:
+        try:
+            payload = event.payload
+            scan_result = payload.get("scan_result", payload)
+            symbol = scan_result.get("symbol")
+            if not symbol:
+                return
+            # Scanner engine evaluates opportunities on the M1 timeframe
+            await self.evaluate_decision(symbol, Timeframe.M1)
+        except Exception as e:
+            logger.error("Error processing scanner match event in DecisionScoringEngine", error=str(e))
 
     async def evaluate_decision(
         self, symbol: str, timeframe: Timeframe, provided_report: Optional[MarketAnalysisReport] = None
@@ -74,11 +89,13 @@ class DecisionScoringEngine:
             regime_val = r_reg.market_regime.value
 
         # Risk
+        # RiskEngine.get_dashboard_metrics() reports OPERATIONAL/RESTRICTED (system-wide
+        # health), which must be translated to the ALLOW/BLOCK vocabulary the confidence
+        # calculator expects (the same vocabulary RiskEngine.validate_order() returns).
         risk_status = "BLOCK"
         try:
             risk_metrics = await risk_engine.get_dashboard_metrics()
-            raw_status = risk_metrics.get("risk_status", "RESTRICTED")
-            risk_status = "ALLOW" if raw_status == "OPERATIONAL" else "BLOCK"
+            risk_status = "ALLOW" if risk_metrics.get("risk_status") == "OPERATIONAL" else "BLOCK"
         except Exception:
             pass
 
@@ -86,7 +103,7 @@ class DecisionScoringEngine:
         strategy_matched = False
         strategy_action = "SIGNAL_NONE"
         try:
-            strategy_responses = await strategy_engine.evaluate_all(symbol, timeframe, publish_events=False)
+            strategy_responses = await strategy_engine.evaluate_all(symbol, timeframe)
             for r in strategy_responses:
                 if r.matched:
                     strategy_matched = True
@@ -124,11 +141,13 @@ class DecisionScoringEngine:
             timeframe=timeframe.value,
             overall_confidence=conf_score,
             component_scores=comp_scores,
-            decision_quality=quality,
             risk_status=risk_status,
+            recommended_strategy=(report.recommended_strategy if report else None),
+            decision_quality=quality,
             missing_requirements=missing_reqs,
             conflicting_signals=conflicts,
             reasoning_summary=reasoning,
+            strategy_action=strategy_action,
             timestamp=datetime.now(timezone.utc)
         )
 

@@ -1,10 +1,43 @@
-// SPV Quantum AI Operating System - Dashboard Controller v2.0.4
+// SPV Quantum AI Operating System - Dashboard Controller v2
 document.addEventListener("DOMContentLoaded", () => {
     const apiBase = window.location.origin;
     const wsUri = `${window.location.protocol === "https:" ? "wss:" : "ws:"}//${window.location.host}/ws`;
 
+    // Intercept window.fetch to automatically append JWT Token if present
+    const originalFetch = window.fetch;
+    window.fetch = async function (resource, options = {}) {
+        const token = localStorage.getItem("access_token");
+        if (token && typeof resource === "string" && (resource.includes("/api/") || resource.includes("/api/settings"))) {
+            options.headers = options.headers || {};
+            options.headers["Authorization"] = `Bearer ${token}`;
+        }
+        const response = await originalFetch(resource, options);
+        if (response.status === 401 && typeof resource === "string" && !resource.includes("/api/auth/login")) {
+            localStorage.removeItem("access_token");
+            window.location.reload();
+        }
+        return response;
+    };
+
     // Active state caches
-    let activePrices = {};
+    let symbolSegments = {};   // symbol -> raw segment (INDEX/EQUITY/COMMODITY/CURRENCY/SPOT)
+    // Central market data store — the single source of truth every Live Market
+    // Monitor widget (indices, gainers/losers, commodities) reads from. There is
+    // exactly one live feed subscription (the Kotak Neo WebSocket on the backend);
+    // this store is how its ticks fan out to multiple widgets without each of
+    // them subscribing separately.
+    let marketDataStore = {};  // symbol -> { ltp, change, changePct, volume }
+
+    // Fixed panel memberships — Market Indices and Commodity Watch always show
+    // exactly these symbols (in this order); Top Gainers/Losers is computed
+    // dynamically from whichever symbols are tagged EQUITY in symbolSegments.
+    const INDEX_SYMBOLS = ["NIFTY50", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"];
+    const INDEX_LABELS = {
+        NIFTY50: "NIFTY 50", BANKNIFTY: "NIFTY BANK", FINNIFTY: "FINNIFTY",
+        MIDCPNIFTY: "NIFTY MIDCAP SELECT", SENSEX: "SENSEX",
+    };
+    const COMMODITY_SYMBOLS = ["CRUDEOIL", "NATURALGAS", "GOLD", "SILVER", "COPPER", "ZINC", "ALUMINIUM", "LEAD", "NICKEL"];
+
     let allLogs = [];
     let activeLogFilter = "all";
     let activeEmployeeCode = null;
@@ -12,7 +45,24 @@ document.addEventListener("DOMContentLoaded", () => {
     let pnlChart = null;
     let accuracyChart = null;
     let ws;
-    let selectedSymbol = "NIFTY50"; // Default active symbol
+
+    // Simplified trading controls state
+    let lastEmployeeList = [];
+    let activeSymbol = null;
+    let latestOpenPositions = [];
+    let pendingConfirmationsInterval;
+    let backtestPollInterval;
+
+    // Strategy Studio state
+    let studioSchema = null;
+    let studioStrategies = [];
+    let studioCurrentName = null;   // null = creating a new strategy
+    let studioConditionRowSeq = 0;
+    let backtestEquityChart = null;
+
+    // IPO Research state (fully independent of trading state above)
+    let activeIPOStatus = "open";
+    let activeIPOSymbol = null;
 
     window.switchTab = function(tabId) {
         document.querySelectorAll(".nav-tabs .tab-btn").forEach(btn => {
@@ -42,12 +92,26 @@ document.addEventListener("DOMContentLoaded", () => {
         if (tabId === "tab-settings") {
             fetchSystemSettings();
         }
-        if (tabId === "tab-paper") {
-            fetchPaperStatus();
+        if (tabId === "tab-strategy") {
+            loadStrategySetup();
+        }
+        if (tabId === "tab-backtest") {
+            populateBacktestStrategyPicker();
+            loadBacktestResult();
+        }
+        if (tabId === "tab-studio") {
+            loadStudioStrategyList();
+        }
+        if (tabId === "tab-ipo") {
+            loadIPOList(activeIPOStatus);
+            loadIPOAccuracy();
+        }
+        if (tabId === "tab-admin") {
+            fetchAdminUsers();
         }
     };
 
-    // REST Interval loops (Fallback)
+    // REST Interval loops
     let metricsInterval;
     let portfolioInterval;
     let telemetryInterval;
@@ -56,17 +120,27 @@ document.addEventListener("DOMContentLoaded", () => {
     setInterval(() => {
         const now = new Date();
         document.getElementById("top-time").textContent = now.toLocaleTimeString();
-    }, 1000);
-
-    // Initial setup
-    fetchInitialData();
-    connectWs();
-    setupEventListeners();
+    }, 1000);    // Check Authentication State on load
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+        document.getElementById("auth-overlay").style.display = "flex";
+        document.querySelector(".app-shell").style.display = "none";
+    } else {
+        document.getElementById("auth-overlay").style.display = "none";
+        document.querySelector(".app-shell").style.display = "flex";
+        
+        // Initial setup
+        fetchInitialData();
+        connectWs();
+        setupEventListeners();
+    }
 
     // Setup WebSockets
     function connectWs() {
         console.log("Connecting WebSocket...");
-        ws = new WebSocket(wsUri);
+        const activeToken = localStorage.getItem("access_token");
+        const finalWsUri = activeToken ? `${wsUri}?token=${activeToken}` : wsUri;
+        ws = new WebSocket(finalWsUri);
 
         ws.onopen = () => {
             document.getElementById("connection-status").textContent = "CONNECTED";
@@ -89,7 +163,7 @@ document.addEventListener("DOMContentLoaded", () => {
         };
     }
 
-    // Event router (WebSockets Event Driven update)
+    // Event router
     function handleBusEvent(event) {
         const { topic, sender, timestamp, data } = event;
         const formattedTime = new Date(timestamp).toLocaleTimeString();
@@ -103,54 +177,28 @@ document.addEventListener("DOMContentLoaded", () => {
             appendTerminalLog(sender, topic, JSON.stringify(data), getTopicStyle(topic));
         }
 
-        // Live Event Routing
+        // Live prices
         if (topic === "market_data" || topic === "tick") {
-            updatePriceWidget(data);
-        } else if (topic === "order_submitted" || topic === "order_filled" || topic === "order_rejected" || topic === "order_cancelled" || topic === "execution_failed" ||
-                   topic === "paper_order_placed" || topic === "paper_order_filled" || topic === "paper_trade_closed") {
+            updatePriceWidget(data.tick || data);
+        } else if (topic === "feed_connected") {
+            setFeedStatus(true);
+        } else if (topic === "feed_disconnected") {
+            setFeedStatus(false);
+        } else if (topic === "order_filled" || topic === "paper_order_filled") {
             refreshTables();
             fetchEmployeeData();
             fetchSystemAnalytics();
-            fetchPaperStatus();
-        } else if (topic === "portfolio_summary_updated") {
-            updatePortfolioSummaryUI(data.summary || data);
-        } else if (topic === "position_opened" || topic === "position_updated" || topic === "position_closed") {
-            refreshTables();
-            fetchPaperStatus();
-        } else if (topic === "system_telemetry") {
-            updateTelemetryUI(data);
         } else if (topic === "volume_intelligence_update") {
-            if (data.symbol === selectedSymbol) {
-                updateVolumeIntelligenceUI(data);
-            }
+            updateVolumeIntelligenceUI(data);
         } else if (topic === "option_flow_updated") {
-            if (data.underlying === selectedSymbol) {
-                updateOptionFlowUI(data);
-            }
+            updateOptionFlowUI(data);
         } else if (topic === "trend_updated") {
-            if (data.symbol === selectedSymbol) {
-                updateTrendIntelUI(data);
-            }
-        } else if (topic === "market_regime") {
-            if (data.symbol === selectedSymbol) {
-                const trendEl = document.getElementById("trend-classification");
-                if (trendEl) {
-                    trendEl.textContent = data.market_regime || data.market_regime_value || "UNKNOWN";
-                    trendEl.className = `badge ${
-                        (data.market_regime || "").includes("BULLISH") ? "badge active" :
-                        (data.market_regime || "").includes("BEARISH") ? "badge failed" : "badge inactive"
-                    }`;
-                }
-            }
+            updateTrendIntelUI(data);
         } else if (topic === "employee_decision" || topic === "trade_approved" || topic === "trade_rejected" || topic === "trade_blocked") {
             handleEmployeeDecision(data);
         } else if (topic === "employee_profile_updated" || topic === "employee_status_updated") {
             fetchEmployeeData();
             fetchSystemAnalytics();
-        } else if (topic === "paper_trade_started" || topic === "paper_trade_stopped") {
-            fetchPaperStatus();
-            fetchBrokerStatus();
-            refreshTables();
         }
     }
 
@@ -158,45 +206,49 @@ document.addEventListener("DOMContentLoaded", () => {
     function setupEventListeners() {
         // Log filters
         const filterContainer = document.getElementById("log-filters");
-        filterContainer.addEventListener("click", (e) => {
-            if (e.target.tagName === "BUTTON") {
-                filterContainer.querySelectorAll("button").forEach(b => b.classList.remove("active"));
-                e.target.classList.add("active");
-                activeLogFilter = e.target.getAttribute("data-filter");
-                renderLogsFromMemory();
-            }
-        });
+        if (filterContainer) {
+            filterContainer.addEventListener("click", (e) => {
+                if (e.target.tagName === "BUTTON") {
+                    filterContainer.querySelectorAll("button").forEach(b => b.classList.remove("active"));
+                    e.target.classList.add("active");
+                    activeLogFilter = e.target.getAttribute("data-filter");
+                    renderLogsFromMemory();
+                }
+            });
+        }
 
         // AI Employee switches
         const empSelect = document.getElementById("emp-select");
-        empSelect.addEventListener("change", async () => {
-            const code = empSelect.value;
-            if (code) {
-                try {
-                    const res = await fetch(`${apiBase}/api/employees/activate?code=${code}`, { method: "POST" });
-                    const r = await res.json();
-                    if (r.status === "success") {
-                        appendTerminalLog("employee_engine", "activate", `AI Employee ${code} activated successfully.`);
-                        await fetchEmployeeData();
-                        await fetchSafetyData();
+        if (empSelect) {
+            empSelect.addEventListener("change", async () => {
+                const code = empSelect.value;
+                if (code) {
+                    try {
+                        const res = await fetch(`${apiBase}/api/employees/activate?code=${code}`, { method: "POST" });
+                        const r = await res.json();
+                        if (r.status === "success") {
+                            appendTerminalLog("employee_engine", "activate", `AI Employee ${code} activated successfully.`);
+                            await fetchEmployeeData();
+                            await fetchSafetyData();
+                        }
+                    } catch (e) {
+                        console.error("Failed to activate employee", e);
                     }
-                } catch (e) {
-                    console.error("Failed to activate employee", e);
                 }
-            }
-        });
+            });
+        }
 
         // Emergency controls
-        document.getElementById("btn-emerg-kill").addEventListener("click", () => triggerEmergencyAction("kill"));
-        document.getElementById("btn-emerg-reset").addEventListener("click", () => triggerEmergencyAction("reset"));
-        document.getElementById("btn-emerg-pause").addEventListener("click", () => triggerEmergencyAction("pause"));
-        document.getElementById("btn-emerg-resume").addEventListener("click", () => triggerEmergencyAction("resume"));
+        document.getElementById("btn-emerg-kill")?.addEventListener("click", () => triggerEmergencyAction("kill"));
+        document.getElementById("btn-emerg-reset")?.addEventListener("click", () => triggerEmergencyAction("reset"));
+        document.getElementById("btn-emerg-pause")?.addEventListener("click", () => triggerEmergencyAction("pause"));
+        document.getElementById("btn-emerg-resume")?.addEventListener("click", () => triggerEmergencyAction("resume"));
 
         // CSV export
-        document.getElementById("btn-export-csv").addEventListener("click", exportTradesCSV);
+        document.getElementById("btn-export-csv")?.addEventListener("click", exportTradesCSV);
 
         // Watchlist searches
-        document.getElementById("market-search").addEventListener("input", (e) => {
+        document.getElementById("market-search")?.addEventListener("input", (e) => {
             const query = e.target.value.toLowerCase();
             document.querySelectorAll(".price-card").forEach(card => {
                 const sym = card.id.replace("price-card-", "").toLowerCase();
@@ -207,6 +259,132 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
             });
         });
+
+        // Show/hide the full multi-panel market overview
+        document.getElementById("btn-toggle-market-panel")?.addEventListener("click", (e) => {
+            const panel = document.getElementById("market-groups");
+            if (panel) {
+                const collapsed = panel.style.display === "none";
+                panel.style.display = collapsed ? "block" : "none";
+                e.target.textContent = collapsed ? "Hide Full Market" : "Show Full Market";
+            }
+        });
+
+        // Strategy Setup: segment filter
+        document.getElementById("strategy-segment-select")?.addEventListener("change", (e) => {
+            renderSymbolOptions("strategy-symbol-select", e.target.value);
+        });
+
+        // Backtest: segment filter
+        document.getElementById("backtest-segment")?.addEventListener("change", (e) => {
+            renderSymbolOptions("backtest-symbol", e.target.value);
+        });
+
+        // Strategy Setup: symbol picker
+        document.getElementById("strategy-symbol-select")?.addEventListener("change", (e) => {
+            if (e.target.value) setActiveSymbol(e.target.value);
+        });
+
+        // Strategy Setup: manual/auto mode toggle
+        document.getElementById("btn-mode-auto")?.addEventListener("click", () => setTradingMode("AUTO"));
+        document.getElementById("btn-mode-manual")?.addEventListener("click", () => setTradingMode("MANUAL"));
+
+        // Strategy Setup: broker toggle
+        document.getElementById("btn-broker-paper")?.addEventListener("click", () => setActiveBroker("paper_broker"));
+        document.getElementById("btn-broker-real")?.addEventListener("click", () => setActiveBroker("kotak_neo"));
+
+        // Backtest form
+        document.getElementById("backtest-form")?.addEventListener("submit", runBacktestFromForm);
+
+        // Pending confirmation buttons
+        document.getElementById("pending-confirmations-list")?.addEventListener("click", (e) => {
+            const confirmId = e.target.getAttribute("data-confirm");
+            const rejectId = e.target.getAttribute("data-reject");
+            if (confirmId) respondToPendingTrade(confirmId, "confirm");
+            if (rejectId) respondToPendingTrade(rejectId, "reject");
+        });
+
+        // Manual Buy/Sell on the active symbol
+        document.getElementById("btn-manual-buy")?.addEventListener("click", () => submitManualOrder("BUY"));
+        document.getElementById("btn-manual-sell")?.addEventListener("click", () => submitManualOrder("SELL"));
+
+        // Employee Monitor: relevant-only filter
+        document.getElementById("chk-relevant-only")?.addEventListener("change", applyEmployeeRelevanceFilter);
+
+        // Strategy Studio
+        document.getElementById("btn-studio-new")?.addEventListener("click", openStudioNew);
+        document.getElementById("btn-studio-validate")?.addEventListener("click", validateStudioForm);
+        document.getElementById("btn-studio-save")?.addEventListener("click", saveStudioForm);
+        document.getElementById("btn-studio-add-entry-condition")?.addEventListener("click", () => createConditionRow("studio-entry-conditions"));
+        document.getElementById("btn-studio-add-exit-condition")?.addEventListener("click", () => createConditionRow("studio-exit-conditions"));
+        document.getElementById("studio-strategy-list")?.addEventListener("click", (e) => {
+            const openName = e.target.getAttribute("data-open");
+            const cloneName = e.target.getAttribute("data-clone");
+            const deleteName = e.target.getAttribute("data-delete");
+            if (openName) openStudioEdit(openName);
+            if (cloneName) cloneStudioStrategy(cloneName);
+            if (deleteName) deleteStudioStrategy(deleteName);
+        });
+
+        // IPO Research
+        document.getElementById("btn-ipo-refresh")?.addEventListener("click", refreshIPOData);
+        document.getElementById("btn-ipo-run-analysis")?.addEventListener("click", runIPOAnalysis);
+        document.getElementById("ipo-status-filters")?.addEventListener("click", (e) => {
+            if (e.target.tagName !== "BUTTON") return;
+            document.querySelectorAll("#ipo-status-filters button").forEach(b => b.classList.remove("active"));
+            e.target.classList.add("active");
+            activeIPOStatus = e.target.getAttribute("data-ipo-status");
+            const ipoSearchEl = document.getElementById("ipo-search");
+            if (ipoSearchEl) ipoSearchEl.value = "";
+            loadIPOList(activeIPOStatus);
+        });
+        let ipoSearchTimeout;
+        document.getElementById("ipo-search")?.addEventListener("input", (e) => {
+            clearTimeout(ipoSearchTimeout);
+            ipoSearchTimeout = setTimeout(() => searchIPOs(e.target.value.trim()), 300);
+        });
+    }
+
+    async function submitManualOrder(side) {
+        if (!activeSymbol) {
+            alert("Select a symbol in Strategy Setup first.");
+            return;
+        }
+        const qtyStr = prompt(`Quantity to ${side} for ${activeSymbol}?`, "1");
+        if (!qtyStr) return;
+        const quantity = parseFloat(qtyStr);
+        if (!quantity || quantity <= 0) {
+            alert("Enter a valid quantity.");
+            return;
+        }
+        try {
+            const res = await fetch(`${apiBase}/api/execution/submit`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbol: activeSymbol, side, quantity, type: "MARKET" })
+            });
+            await res.json();
+            appendTerminalLog("dashboard_client", "manual_order", `Manual ${side} submitted for ${activeSymbol} x${quantity}.`);
+            await refreshTables();
+        } catch (e) {
+            console.error("Failed to submit manual order", e);
+        }
+    }
+
+    async function applyEmployeeRelevanceFilter() {
+        const relevantOnly = document.getElementById("chk-relevant-only").checked;
+        if (!relevantOnly) {
+            renderMonitoringPage(lastEmployeeList);
+            return;
+        }
+        try {
+            const res = await fetch(`${apiBase}/api/employees/relevant`);
+            const data = await res.json();
+            renderMonitoringPage(data.employees && data.employees.length ? data.employees : lastEmployeeList);
+        } catch (e) {
+            console.error("Failed to fetch relevant employees", e);
+            renderMonitoringPage(lastEmployeeList);
+        }
     }
 
     async function triggerEmergencyAction(action) {
@@ -220,18 +398,197 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // ── P&L report (day / week / month / all-time, split by segment) ─────────
+    // Reads the persisted closed_trades table, so these numbers survive a
+    // restart — unlike the in-memory position book.
+    let pnlReport = null;
+    let pnlPeriod = "today";
+    let pnlDetailSegment = null;   // segment currently drilled into (null = all)
+
+    const inr = (n) => `${n < 0 ? '-' : ''}₹${Math.abs(n).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+
+    function renderPnlReport() {
+        const body = document.getElementById("pnl-segments-body");
+        if (!body) return;
+        const p = pnlReport && pnlReport.periods ? pnlReport.periods[pnlPeriod] : null;
+
+        const net = p ? p.net_pnl : 0;
+        const netEl = document.getElementById("pnl-net");
+        netEl.textContent = inr(net);
+        netEl.className = net > 0 ? "value text-green" : (net < 0 ? "value text-red" : "value");
+        document.getElementById("pnl-profit").textContent = inr(p ? p.profit : 0);
+        document.getElementById("pnl-loss").textContent = inr(p ? p.loss : 0);
+        document.getElementById("pnl-trades").textContent = p ? p.trades : 0;
+        document.getElementById("pnl-winrate").textContent = (p && p.trades) ? `${p.win_rate}%` : "–";
+
+        const segments = p && p.segments ? Object.entries(p.segments) : [];
+        if (segments.length === 0) {
+            const empty = document.createElement("tr");
+            empty.innerHTML = `<td colspan="6" class="text-center text-muted">No completed trades in this period.</td>`;
+            body.replaceChildren(empty);
+            return;
+        }
+
+        const frag = document.createDocumentFragment();
+        segments.sort((a, b) => b[1].net_pnl - a[1].net_pnl).forEach(([name, s]) => {
+            const tr = document.createElement("tr");
+            tr.className = "pnl-segment-row";
+            tr.dataset.segment = name;
+            tr.title = "Click to see every trade in this segment";
+            tr.innerHTML = `
+                <td><b>${name}</b></td>
+                <td>${s.trades}</td>
+                <td><span class="text-green">${s.wins}</span> / <span class="text-red">${s.losses}</span></td>
+                <td class="text-green">${inr(s.profit)}</td>
+                <td class="text-red">${inr(s.loss)}</td>
+                <td class="${s.net_pnl >= 0 ? 'text-green' : 'text-red'}"><b>${inr(s.net_pnl)}</b></td>`;
+            frag.appendChild(tr);
+        });
+        body.replaceChildren(frag);
+    }
+
+    // ── Drill-down: every trade behind a segment (or the whole period) ───────
+    const PERIOD_LABEL = { today: "Today", week: "This Week", month: "This Month", total: "All Time" };
+
+    async function showPnlTrades(segment) {
+        const box = document.getElementById("pnl-detail");
+        const tbody = document.getElementById("pnl-detail-body");
+        if (!box || !tbody) return;
+
+        pnlDetailSegment = segment || null;
+        document.getElementById("pnl-detail-title").textContent =
+            `${segment || "All segments"} — ${PERIOD_LABEL[pnlPeriod] || pnlPeriod}`;
+        box.hidden = false;
+
+        const loading = document.createElement("tr");
+        loading.innerHTML = `<td colspan="9" class="text-center text-muted">Loading…</td>`;
+        tbody.replaceChildren(loading);
+
+        try {
+            const url = `${apiBase}/api/reports/trades?period=${encodeURIComponent(pnlPeriod)}`
+                + (segment ? `&segment=${encodeURIComponent(segment)}` : "");
+            const data = await (await fetch(url)).json();
+
+            if (!data.trades || data.trades.length === 0) {
+                const empty = document.createElement("tr");
+                empty.innerHTML = `<td colspan="9" class="text-center text-muted">No trades in this period.</td>`;
+                tbody.replaceChildren(empty);
+                return;
+            }
+
+            const frag = document.createDocumentFragment();
+            data.trades.forEach(t => {
+                const tr = document.createElement("tr");
+                tr.innerHTML = `
+                    <td><b>${t.symbol}</b></td>
+                    <td>${t.segment}</td>
+                    <td><span class="${t.side === 'BUY' ? 'text-green' : 'text-red'}">${t.side}</span></td>
+                    <td>${t.quantity}</td>
+                    <td>${t.entry_time || '-'}</td>
+                    <td>₹${Number(t.entry_price).toFixed(2)}</td>
+                    <td>${t.exit_time || '-'}</td>
+                    <td>₹${Number(t.exit_price).toFixed(2)}</td>
+                    <td class="${t.pnl >= 0 ? 'text-green' : 'text-red'}"><b>${inr(t.pnl)}</b></td>`;
+                frag.appendChild(tr);
+            });
+
+            const total = document.createElement("tr");
+            total.className = "pnl-detail-total";
+            total.innerHTML = `
+                <td colspan="8"><b>Total — ${data.count} trade${data.count === 1 ? '' : 's'}</b></td>
+                <td class="${data.net_pnl >= 0 ? 'text-green' : 'text-red'}"><b>${inr(data.net_pnl)}</b></td>`;
+            frag.appendChild(total);
+
+            tbody.replaceChildren(frag);
+        } catch (e) {
+            console.error("Failed to fetch trade details", e);
+            const err = document.createElement("tr");
+            err.innerHTML = `<td colspan="9" class="text-center text-red">Could not load trades.</td>`;
+            tbody.replaceChildren(err);
+        }
+    }
+
+    document.getElementById("pnl-segments-body")?.addEventListener("click", (ev) => {
+        const row = ev.target.closest("tr.pnl-segment-row");
+        if (row) showPnlTrades(row.dataset.segment);
+    });
+
+    // The "Trades" headline box opens the full list for the period
+    document.getElementById("pnl-trades")?.closest(".pnl-headline-item")
+        ?.addEventListener("click", () => showPnlTrades(null));
+
+    document.getElementById("pnl-detail-close")?.addEventListener("click", () => {
+        document.getElementById("pnl-detail").hidden = true;
+    });
+
+    async function fetchPnlReport() {
+        try {
+            const res = await fetch(`${apiBase}/api/reports/pnl`);
+            pnlReport = await res.json();
+            renderPnlReport();
+        } catch (e) {
+            console.error("Failed to fetch P&L report", e);
+        }
+    }
+
+    document.getElementById("pnl-period-tabs")?.addEventListener("click", (ev) => {
+        const btn = ev.target.closest("button[data-period]");
+        if (!btn) return;
+        pnlPeriod = btn.dataset.period;
+        document.querySelectorAll("#pnl-period-tabs button")
+            .forEach(b => b.classList.toggle("active", b === btn));
+        renderPnlReport();
+        // Keep an open drill-down in step with the period, never stale
+        const detail = document.getElementById("pnl-detail");
+        if (detail && !detail.hidden) showPnlTrades(pnlDetailSegment);
+    });
+
     // Refresh core tables
     async function refreshTables() {
         await Promise.all([
             fetchPortfolioSummary(),
             fetchClosedTrades(),
-            fetchActivePositions()
+            fetchActivePositions(),
+            fetchPnlReport()
         ]);
     }
 
     // Initial load
+    async function fetchSymbolGroups() {
+        try {
+            const res = await fetch(`${apiBase}/api/market/segments`);
+            symbolSegments = await res.json();
+        } catch (e) {
+            console.error("Failed to fetch market segments", e);
+        }
+    }
+
+    // Bulk-load whatever prices the server already has cached, so the panels
+    // aren't empty until the next live tick happens to arrive for each symbol.
+    async function fetchMarketSnapshot() {
+        try {
+            const res = await fetch(`${apiBase}/api/market/snapshot`);
+            const snapshot = await res.json();
+            Object.keys(snapshot).forEach(sym => {
+                const s = snapshot[sym];
+                marketDataStore[sym] = {
+                    ltp: s.ltp, change: s.change, changePct: s.change_pct, volume: s.volume,
+                };
+            });
+            renderMarketIndices();
+            renderCommodityWatch();
+            renderTopGainersLosers();
+        } catch (e) {
+            console.error("Failed to fetch market snapshot", e);
+        }
+    }
+
     async function fetchInitialData() {
+        await fetchSymbolGroups();
         await Promise.all([
+            fetchUserProfile(),
+            fetchMarketSnapshot(),
+            fetchFeedStatus(),
             fetchEmployeeData(),
             fetchBrokerStatus(),
             fetchSafetyData(),
@@ -243,21 +600,1063 @@ document.addEventListener("DOMContentLoaded", () => {
             fetchSystemSettings(),
             fetchDecisionHistory(),
             fetchSystemAnalytics(),
-            fetchPaperStatus()
+            populateSymbolPickers(),
+            loadTradingMode()
         ]);
+        // After the pickers are built — so the active symbol's segment/option exist.
+        await loadActiveSymbol();
 
-        // Start fallback loops (UI updates mainly driven by WebSockets)
+        // Start loops — deliberately spread across time so several heavy
+        // re-renders never land in the same frame. Previously the two 3s loops
+        // fired together and stacked into one long task, freezing the UI for
+        // ~30-70ms every tick (looked like the screen briefly going blank).
         portfolioInterval = setInterval(() => {
             refreshTables();
-            fetchSystemAnalytics();
-        }, 5000);
-        telemetryInterval = setInterval(() => {
-            fetchTelemetryData();
-            fetchVolumeIntelligenceData();
-            fetchOptionFlowData();
-            fetchTrendIntelData();
-            fetchPaperStatus();
-        }, 5000);
+            updateMySymbolCard();
+        }, 3000);
+        // Analytics = 2 fetches + a chart redraw; it doesn't need 3s cadence.
+        setInterval(fetchSystemAnalytics, 9000);
+        // Telemetry group offset by ~1.2s so it interleaves between portfolio
+        // ticks instead of colliding with them.
+        setTimeout(() => {
+            telemetryInterval = setInterval(() => {
+                fetchTelemetryData();
+                fetchVolumeIntelligenceData();
+                fetchOptionFlowData();
+                fetchTrendIntelData();
+            }, 3000);
+        }, 1200);
+        setInterval(fetchFeedStatus, 5000);
+        pendingConfirmationsInterval = setInterval(fetchPendingConfirmations, 4000);
+        fetchPendingConfirmations();
+    }
+
+    // ── Simplified Trading Controls: symbol picker, mode, broker ──────────────
+
+    // Friendly names for the raw segment tags in symbolSegments, plus the order
+    // they should appear in the Segment dropdown.
+    const SEGMENT_LABELS = {
+        INDEX: "Index",
+        EQUITY: "Equity (Stocks)",
+        OPTIONS: "Options (Derivatives)",
+        COMMODITY: "Commodity",
+        CURRENCY: "Currency",
+        SPOT: "Crypto / Spot",
+        OTHER: "Other",
+    };
+    const SEGMENT_ORDER = ["INDEX", "EQUITY", "OPTIONS", "COMMODITY", "CURRENCY", "SPOT", "OTHER"];
+    let allTradableSymbols = [];   // full sorted symbol universe, filtered by segment for the picker
+
+    function segmentOf(symbol) {
+        return symbolSegments[symbol] || "OTHER";
+    }
+
+    // Fill a symbol <select> with only the symbols in the chosen segment
+    // (empty segment = all). Keeps the current pick if it's still valid.
+    function renderSymbolOptions(selectId, segment) {
+        const sel = document.getElementById(selectId);
+        if (!sel) return;
+        const current = sel.value;
+        const list = segment
+            ? allTradableSymbols.filter(s => segmentOf(s) === segment)
+            : allTradableSymbols;
+        sel.innerHTML = `<option value="">-- Select Symbol --</option>`;
+        list.forEach(sym => {
+            const opt = document.createElement("option");
+            opt.value = sym;
+            opt.textContent = sym;
+            sel.appendChild(opt);
+        });
+        if (current && list.includes(current)) sel.value = current;
+    }
+
+    // Fill a segment <select> with only the segments that actually have symbols.
+    function renderSegmentOptions(selectId) {
+        const segSel = document.getElementById(selectId);
+        if (!segSel) return;
+        const present = [...new Set(allTradableSymbols.map(segmentOf))]
+            .sort((a, b) => SEGMENT_ORDER.indexOf(a) - SEGMENT_ORDER.indexOf(b));
+        const currentSeg = segSel.value;
+        segSel.innerHTML = `<option value="">-- All Segments --</option>`;
+        present.forEach(seg => {
+            const opt = document.createElement("option");
+            opt.value = seg;
+            opt.textContent = SEGMENT_LABELS[seg] || seg;
+            segSel.appendChild(opt);
+        });
+        if (currentSeg) segSel.value = currentSeg;
+    }
+
+    async function populateSymbolPickers() {
+        try {
+            const res = await fetch(`${apiBase}/api/market/symbols`);
+            const data = await res.json();
+            allTradableSymbols = (data.symbols || []).slice().sort();
+
+            // Both pickers get the same two-step segment → symbol behaviour.
+            renderSegmentOptions("strategy-segment-select");
+            renderSymbolOptions("strategy-symbol-select",
+                document.getElementById("strategy-segment-select")?.value || "");
+
+            renderSegmentOptions("backtest-segment");
+            renderSymbolOptions("backtest-symbol",
+                document.getElementById("backtest-segment")?.value || "");
+        } catch (e) {
+            console.error("Failed to populate symbol pickers", e);
+        }
+    }
+
+    async function loadActiveSymbol() {
+        try {
+            const res = await fetch(`${apiBase}/api/trading/active-symbol`);
+            const data = await res.json();
+            activeSymbol = data.symbol;
+            const sel = document.getElementById("strategy-symbol-select");
+            if (sel && activeSymbol) {
+                // Point the segment filter at the active symbol's segment so it
+                // stays visible in the (now filtered) symbol dropdown.
+                const segSel = document.getElementById("strategy-segment-select");
+                if (segSel) {
+                    segSel.value = segmentOf(activeSymbol);
+                    renderSymbolOptions("strategy-symbol-select", segSel.value);
+                }
+                sel.value = activeSymbol;
+            }
+            updateMySymbolCard();
+        } catch (e) {
+            console.error("Failed to load active symbol", e);
+        }
+    }
+
+    async function setActiveSymbol(symbol) {
+        try {
+            await fetch(`${apiBase}/api/trading/active-symbol`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ symbol })
+            });
+            activeSymbol = symbol.toUpperCase();
+            updateMySymbolCard();
+            appendTerminalLog("dashboard_client", "active_symbol", `Now working on ${activeSymbol}.`);
+        } catch (e) {
+            console.error("Failed to set active symbol", e);
+        }
+    }
+
+    function updateMySymbolCard() {
+        const emptyEl = document.getElementById("my-symbol-empty");
+        const contentEl = document.getElementById("my-symbol-content");
+        if (!activeSymbol) {
+            emptyEl.style.display = "block";
+            contentEl.style.display = "none";
+            return;
+        }
+        emptyEl.style.display = "none";
+        contentEl.style.display = "block";
+        document.getElementById("my-symbol-name").textContent = activeSymbol;
+
+        const tick = marketDataStore[activeSymbol];
+        if (tick) {
+            document.getElementById("my-symbol-ltp").textContent = `₹${Number(tick.ltp).toFixed(2)}`;
+            const chg = Number(tick.changePct || 0);
+            const chgEl = document.getElementById("my-symbol-change");
+            chgEl.textContent = `${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%`;
+            chgEl.className = `value ${chg >= 0 ? "text-green" : "text-red"}`;
+        } else {
+            document.getElementById("my-symbol-ltp").textContent = "-";
+            document.getElementById("my-symbol-change").textContent = "-";
+        }
+
+        const posEl = document.getElementById("my-symbol-position");
+        const pos = latestOpenPositions.find(p => p.symbol === activeSymbol);
+        if (pos) {
+            const pnlClass = pos.unrealized_pnl >= 0 ? "text-green" : "text-red";
+            posEl.innerHTML = `${pos.side} ${pos.quantity} @ ₹${pos.avg_price.toFixed(2)} &nbsp; <span class="${pnlClass}">₹${pos.unrealized_pnl.toFixed(2)}</span>`;
+        } else {
+            posEl.textContent = "No open position";
+        }
+    }
+
+    async function loadTradingMode() {
+        try {
+            const res = await fetch(`${apiBase}/api/trading/mode`);
+            const data = await res.json();
+            setModeButtonsActive(data.mode);
+        } catch (e) {
+            console.error("Failed to load trading mode", e);
+        }
+        try {
+            const res2 = await fetch(`${apiBase}/api/broker/status`);
+            const status = await res2.json();
+            setBrokerButtonsActive(status.broker);
+        } catch (e) {
+            console.error("Failed to load broker status", e);
+        }
+    }
+
+    function setModeButtonsActive(mode) {
+        document.querySelectorAll(".mode-toggle-btn").forEach(btn => {
+            btn.classList.toggle("active-toggle", btn.getAttribute("data-mode") === mode);
+        });
+        const manualActionsEl = document.getElementById("manual-trade-actions");
+        if (manualActionsEl) manualActionsEl.style.display = mode === "MANUAL" ? "flex" : "none";
+        const badgeEl = document.getElementById("my-symbol-mode-badge");
+        if (badgeEl) {
+            badgeEl.textContent = mode;
+            badgeEl.className = `badge ${mode === "MANUAL" ? "text-orange" : "text-green"}`;
+        }
+        const pendingCard = document.getElementById("pending-confirmations-card");
+        if (pendingCard && mode === "AUTO") pendingCard.style.display = "none";
+    }
+
+    function setBrokerButtonsActive(broker) {
+        document.querySelectorAll(".broker-toggle-btn").forEach(btn => {
+            btn.classList.toggle("active-toggle", btn.getAttribute("data-broker") === broker);
+        });
+        const activeBrokerEl = document.getElementById("settings-active-broker");
+        if (activeBrokerEl) {
+            activeBrokerEl.value = broker;
+            toggleCredentialsVisibility();
+        }
+    }
+
+    async function setTradingMode(mode) {
+        try {
+            const res = await fetch(`${apiBase}/api/trading/mode`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mode })
+            });
+            const r = await res.json();
+            setModeButtonsActive(r.mode);
+            document.getElementById("strategy-setup-status").textContent = `Trade mode set to ${r.mode}.`;
+        } catch (e) {
+            console.error("Failed to set trading mode", e);
+        }
+    }
+
+    async function setActiveBroker(broker) {
+        try {
+            const res = await fetch(`${apiBase}/api/trading/broker`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ broker })
+            });
+            const r = await res.json();
+            setBrokerButtonsActive(r.broker);
+            document.getElementById("strategy-setup-status").textContent =
+                `Broker switched to ${r.broker === "paper_broker" ? "Paper Trading" : "Real Money (Kotak Neo)"}.`;
+            await fetchBrokerStatus();
+        } catch (e) {
+            console.error("Failed to switch broker", e);
+            document.getElementById("strategy-setup-status").textContent = "Failed to switch broker.";
+        }
+    }
+
+    async function loadStrategySetup() {
+        await populateSymbolPickers();
+        await loadActiveSymbol();
+        await loadTradingMode();
+        try {
+            const res = await fetch(`${apiBase}/api/employees/relevant`);
+            const data = await res.json();
+            const el = document.getElementById("active-strategy-details");
+            if (!data.strategy_name) {
+                el.innerHTML = `<div>No active strategy configured.</div>`;
+                return;
+            }
+            el.innerHTML = `
+                <div><strong>Strategy:</strong> ${data.strategy_name}</div>
+                <div><strong>Instrument segment:</strong> ${data.segment}</div>
+                <div><strong>Relevant AI Employees:</strong> ${data.relevant_codes.length} of 30</div>
+            `;
+        } catch (e) {
+            console.error("Failed to load active strategy", e);
+        }
+    }
+
+    // ── Pending Confirmations (Manual mode) ────────────────────────────────────
+
+    async function fetchPendingConfirmations() {
+        try {
+            const res = await fetch(`${apiBase}/api/trading/pending`);
+            const pending = await res.json();
+            const card = document.getElementById("pending-confirmations-card");
+            const list = document.getElementById("pending-confirmations-list");
+            if (!pending || pending.length === 0) {
+                card.style.display = "none";
+                return;
+            }
+            card.style.display = "block";
+            list.innerHTML = "";
+            pending.forEach(p => {
+                const row = document.createElement("div");
+                row.className = "pending-confirmation-row";
+                row.style.cssText = "display:flex; align-items:center; justify-content:space-between; padding:0.6rem 0; border-bottom:1px solid var(--border-glass);";
+                row.innerHTML = `
+                    <div>
+                        <strong>${p.side} ${p.symbol}</strong>
+                        <span style="color: var(--text-secondary); font-size: 0.85rem;">qty ${p.quantity} @ ₹${Number(p.price).toFixed(2)}</span>
+                    </div>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn-success btn-xs" data-confirm="${p.decision_id}">Confirm</button>
+                        <button class="btn-danger btn-xs" data-reject="${p.decision_id}">Reject</button>
+                    </div>
+                `;
+                list.appendChild(row);
+            });
+        } catch (e) {
+            console.error("Failed to fetch pending confirmations", e);
+        }
+    }
+
+    async function respondToPendingTrade(decisionId, action) {
+        try {
+            await fetch(`${apiBase}/api/trading/${action}/${decisionId}`, { method: "POST" });
+            appendTerminalLog("dashboard_client", `trade_${action}`, `Trade ${action}ed: ${decisionId}`);
+            await fetchPendingConfirmations();
+            await refreshTables();
+        } catch (e) {
+            console.error(`Failed to ${action} trade`, e);
+        }
+    }
+
+    // ── Backtest ────────────────────────────────────────────────────────────────
+
+    async function populateBacktestStrategyPicker() {
+        try {
+            const res = await fetch(`${apiBase}/api/strategy-studio/strategies`);
+            const studioList = await res.json();
+            const res2 = await fetch(`${apiBase}/api/strategies/active`);
+            const yamlList = await res2.json();
+
+            const studioNames = new Set(studioList.map(s => s.strategy_name));
+            const allNames = [...studioNames, ...yamlList.map(s => s.name).filter(n => !studioNames.has(n))];
+
+            const sel = document.getElementById("backtest-strategy");
+            const current = sel.value;
+            sel.innerHTML = `<option value="">-- Select Strategy --</option>`;
+            allNames.forEach(name => {
+                const opt = document.createElement("option");
+                opt.value = name;
+                opt.textContent = name;
+                sel.appendChild(opt);
+            });
+            if (current) sel.value = current;
+        } catch (e) {
+            console.error("Failed to populate backtest strategy picker", e);
+        }
+    }
+
+    async function runBacktestFromForm(e) {
+        e.preventDefault();
+        const strategyName = document.getElementById("backtest-strategy").value;
+        const symbol = document.getElementById("backtest-symbol").value;
+        const start = document.getElementById("backtest-start-date").value;
+        const end = document.getElementById("backtest-end-date").value;
+        if (!strategyName || !symbol || !start || !end) {
+            alert("Please select a strategy, symbol, and date range.");
+            return;
+        }
+        const config = {
+            symbols: [symbol],
+            timeframe: "1m",
+            start_date: new Date(start + "T00:00:00Z").toISOString(),
+            end_date: new Date(end + "T23:59:59Z").toISOString(),
+            initial_capital: 100000.0,
+            strategy_name: strategyName
+        };
+        try {
+            const res = await fetch(`${apiBase}/api/backtest/run`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(config)
+            });
+            await res.json();
+            document.getElementById("backtest-progress").style.display = "block";
+            document.getElementById("backtest-result-card").style.display = "none";
+            if (backtestPollInterval) clearInterval(backtestPollInterval);
+            backtestPollInterval = setInterval(pollBacktestStatus, 500);
+        } catch (e) {
+            console.error("Failed to start backtest", e);
+        }
+    }
+
+    async function pollBacktestStatus() {
+        try {
+            const res = await fetch(`${apiBase}/api/backtest/status`);
+            const status = await res.json();
+            const pct = status.progress_pct || 0;
+            document.getElementById("backtest-progress-fill").style.width = `${pct}%`;
+            document.getElementById("backtest-progress-text").textContent =
+                `${status.status} — ${pct.toFixed(0)}% (${status.trades_executed || 0} trades so far)`;
+            if (status.status === "COMPLETED" || status.status === "FAILED") {
+                clearInterval(backtestPollInterval);
+                await loadBacktestResult();
+            }
+        } catch (e) {
+            console.error("Failed to poll backtest status", e);
+        }
+    }
+
+    async function loadBacktestResult() {
+        try {
+            const res = await fetch(`${apiBase}/api/backtest/result`);
+            const result = await res.json();
+            if (!result.verdict) return;
+            document.getElementById("backtest-progress").style.display = "none";
+            const card = document.getElementById("backtest-result-card");
+            card.style.display = "block";
+            const badge = document.getElementById("backtest-verdict-badge");
+            badge.textContent = result.verdict.headline;
+            const colorClass = result.verdict.label === "PROFITABLE" ? "text-green"
+                : result.verdict.label === "NOT_PROFITABLE" ? "text-red" : "text-orange";
+            badge.className = `badge ${colorClass}`;
+            document.getElementById("backtest-verdict-detail").textContent = result.verdict.detail || "";
+
+            renderBacktestMetricsGrid(result.metrics || {});
+            renderBacktestEquityChart(result.equity_curve || []);
+            renderBacktestTradeLog(result.trade_log || []);
+        } catch (e) {
+            console.error("Failed to load backtest result", e);
+        }
+    }
+
+    function renderBacktestMetricsGrid(metrics) {
+        const grid = document.getElementById("backtest-metrics-grid");
+        if (!metrics.total_trades && metrics.total_trades !== 0) {
+            grid.innerHTML = "";
+            return;
+        }
+        const pnlClass = (metrics.net_profit_loss || 0) >= 0 ? "text-green" : "text-red";
+        const pf = metrics.profit_factor;
+        const tiles = [
+            ["Total Trades", metrics.total_trades ?? 0],
+            ["Winning Trades", metrics.winning_trades ?? 0],
+            ["Losing Trades", metrics.losing_trades ?? 0],
+            ["Win Rate", `${(metrics.win_rate_pct ?? 0).toFixed(1)}%`],
+            ["Loss Rate", `${(metrics.loss_rate_pct ?? 0).toFixed(1)}%`],
+            ["Net P&L", `₹${(metrics.net_profit_loss ?? 0).toFixed(2)}`, pnlClass],
+            ["Profit Factor", pf === null || pf === undefined ? "N/A" : pf.toFixed(2)],
+            ["Max Drawdown", `${(metrics.drawdown_pct ?? 0).toFixed(1)}%`],
+            ["Sharpe Ratio", (metrics.sharpe_ratio ?? 0).toFixed(2)],
+        ];
+        grid.innerHTML = tiles.map(([label, value, cls]) => `
+            <div class="metric-card">
+                <span class="label">${label}</span>
+                <span class="value ${cls || ''}">${value}</span>
+            </div>
+        `).join("");
+    }
+
+    function renderBacktestEquityChart(equityCurve) {
+        const ctx = document.getElementById("backtest-equity-chart");
+        if (!ctx || typeof Chart === "undefined") return;
+
+        const labels = equityCurve.map((p, i) => i === 0 ? "Start" : `Trade ${i}`);
+        const data = equityCurve.map(p => p.equity);
+
+        if (backtestEquityChart) {
+            backtestEquityChart.data.labels = labels;
+            backtestEquityChart.data.datasets[0].data = data;
+            backtestEquityChart.update();
+            return;
+        }
+        backtestEquityChart = new Chart(ctx, {
+            type: "line",
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: "Equity (₹)",
+                    data: data,
+                    borderColor: "#00f5a0",
+                    backgroundColor: "rgba(0, 245, 160, 0.1)",
+                    fill: true,
+                    tension: 0.2,
+                    borderWidth: 2,
+                }],
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: true, labels: { color: "#f3f4f6" } },
+                    tooltip: { mode: "index", intersect: false },
+                },
+                scales: {
+                    y: { grid: { color: "rgba(255,255,255,0.05)" }, ticks: { color: "#9ca3af" } },
+                    x: { grid: { display: false }, ticks: { color: "#9ca3af" } },
+                },
+            },
+        });
+    }
+
+    function renderBacktestTradeLog(tradeLog) {
+        const body = document.getElementById("backtest-trade-log-body");
+        if (!tradeLog || tradeLog.length === 0) {
+            body.innerHTML = `<tr><td colspan="7" class="text-center text-muted">No trades in this run.</td></tr>`;
+            return;
+        }
+        body.innerHTML = tradeLog.map(t => {
+            const pnlClass = t.realized_pnl >= 0 ? "text-green" : "text-red";
+            return `
+                <tr>
+                    <td>${new Date(t.timestamp).toLocaleString()}</td>
+                    <td><b>${t.symbol}</b></td>
+                    <td><span class="${t.side === 'BUY' ? 'text-green' : 'text-red'}">${t.side}</span></td>
+                    <td>₹${Number(t.entry_price).toFixed(2)}</td>
+                    <td>${t.exit_price !== null && t.exit_price !== undefined ? "₹" + Number(t.exit_price).toFixed(2) : "-"}</td>
+                    <td>${t.quantity}</td>
+                    <td class="${pnlClass}">₹${Number(t.realized_pnl).toFixed(2)}</td>
+                </tr>
+            `;
+        }).join("");
+    }
+
+    // ── Strategy Studio ──────────────────────────────────────────────────────
+
+    async function ensureStudioSchema() {
+        if (studioSchema) return studioSchema;
+        const res = await fetch(`${apiBase}/api/strategy-studio/schema`);
+        studioSchema = await res.json();
+        return studioSchema;
+    }
+
+    async function loadStudioStrategyList() {
+        await ensureStudioSchema();
+        try {
+            const res = await fetch(`${apiBase}/api/strategy-studio/strategies`);
+            studioStrategies = await res.json();
+        } catch (e) {
+            console.error("Failed to load Strategy Studio list", e);
+            studioStrategies = [];
+        }
+        const container = document.getElementById("studio-strategy-list");
+        container.innerHTML = "";
+        if (studioStrategies.length === 0) {
+            container.innerHTML = `<p style="color: var(--text-secondary); font-size: 0.85rem; padding: 0.5rem 0;">No strategies yet — click "+ New" to build one.</p>`;
+        }
+        studioStrategies.forEach(s => {
+            const row = document.createElement("div");
+            row.className = "studio-strategy-row";
+            row.style.cssText = "padding: 0.6rem 0; border-bottom: 1px solid var(--border-glass);";
+            row.innerHTML = `
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <strong style="cursor:pointer;" data-open="${s.strategy_name}">${s.strategy_name}</strong>
+                    <span class="badge ${s.enabled ? 'text-green' : ''}" style="font-size: 0.7rem;">v${s.active_version}</span>
+                </div>
+                <div style="font-size: 0.78rem; color: var(--text-secondary); margin: 0.2rem 0;">${s.description || ''}</div>
+                <div style="display:flex; gap: 0.4rem; margin-top: 0.3rem;">
+                    <button class="btn-action btn-xs" data-open="${s.strategy_name}">Edit</button>
+                    <button class="btn-action btn-xs" data-clone="${s.strategy_name}">Clone</button>
+                    <button class="btn-danger btn-xs" data-delete="${s.strategy_name}">Delete</button>
+                </div>
+            `;
+            container.appendChild(row);
+        });
+    }
+
+    function studioSourceOptions(selected) {
+        return studioSchema.sources.map(s => `<option value="${s}" ${s === selected ? "selected" : ""}>${s}</option>`).join("");
+    }
+
+    function studioOperatorOptions(selected) {
+        return studioSchema.operators.map(o => `<option value="${o}" ${o === selected ? "selected" : ""}>${o}</option>`).join("");
+    }
+
+    function studioIndicatorOptions(selected) {
+        let opts = `<option value="">-- text/number --</option>`;
+        opts += studioSchema.indicators.map(i => `<option value="${i.key}" ${i.key === selected ? "selected" : ""}>${i.key}</option>`).join("");
+        return opts;
+    }
+
+    function createConditionRow(containerId, condition) {
+        condition = condition || {};
+        const rowId = `cond-row-${studioConditionRowSeq++}`;
+        const container = document.getElementById(containerId);
+        const row = document.createElement("div");
+        row.className = "studio-condition-row";
+        row.id = rowId;
+        row.style.cssText = "display: grid; grid-template-columns: 1.2fr 1.2fr 1fr 1fr 1.2fr auto; gap: 0.4rem; align-items: center; margin-bottom: 0.5rem;";
+
+        const isIndicator = (condition.source || "indicator") === "indicator";
+        row.innerHTML = `
+            <select class="cond-source" style="padding: 0.35rem; border-radius: 6px; background: rgba(0,0,0,0.3); color: var(--text-primary); border: 1px solid var(--border-glass);">${studioSourceOptions(condition.source || "indicator")}</select>
+            <select class="cond-key" style="padding: 0.35rem; border-radius: 6px; background: rgba(0,0,0,0.3); color: var(--text-primary); border: 1px solid var(--border-glass); display:${isIndicator ? "block" : "none"};">${studioIndicatorOptions(condition.key)}</select>
+            <input class="cond-key-text" type="text" placeholder="key" value="${condition.source && !isIndicator ? (condition.key || "") : ""}" style="padding: 0.35rem; border-radius: 6px; background: rgba(0,0,0,0.2); color: var(--text-primary); border: 1px solid var(--border-glass); display:${isIndicator ? "none" : "block"};">
+            <select class="cond-operator" style="padding: 0.35rem; border-radius: 6px; background: rgba(0,0,0,0.3); color: var(--text-primary); border: 1px solid var(--border-glass);">${studioOperatorOptions(condition.operator)}</select>
+            <input class="cond-value" type="text" placeholder="value (e.g. 50 or TRENDING_BULLISH)" value="${condition.value !== undefined && condition.value !== null ? condition.value : ""}" style="padding: 0.35rem; border-radius: 6px; background: rgba(0,0,0,0.2); color: var(--text-primary); border: 1px solid var(--border-glass);">
+            <div style="display:flex; gap:0.3rem;">
+                <select class="cond-target" style="flex:1; padding: 0.35rem; border-radius: 6px; background: rgba(0,0,0,0.3); color: var(--text-primary); border: 1px solid var(--border-glass);" title="Target indicator (for comparing two indicators)">${studioIndicatorOptions(condition.target)}</select>
+                <button class="btn-danger btn-xs" type="button" data-remove-row="${rowId}">✕</button>
+            </div>
+        `;
+        container.appendChild(row);
+
+        row.querySelector(".cond-source").addEventListener("change", (e) => {
+            const indicatorMode = e.target.value === "indicator";
+            row.querySelector(".cond-key").style.display = indicatorMode ? "block" : "none";
+            row.querySelector(".cond-key-text").style.display = indicatorMode ? "none" : "block";
+        });
+        row.querySelector("[data-remove-row]").addEventListener("click", () => row.remove());
+    }
+
+    function collectConditionsFromContainer(containerId) {
+        const container = document.getElementById(containerId);
+        const conditions = [];
+        container.querySelectorAll(".studio-condition-row").forEach(row => {
+            const source = row.querySelector(".cond-source").value;
+            const isIndicator = source === "indicator";
+            const key = isIndicator ? row.querySelector(".cond-key").value : row.querySelector(".cond-key-text").value;
+            const operator = row.querySelector(".cond-operator").value;
+            const rawValue = row.querySelector(".cond-value").value;
+            const target = row.querySelector(".cond-target").value;
+
+            const cond = { source, operator: operator };
+            if (key) cond.key = key;
+            if (target) cond.target = target;
+            if (rawValue !== "") {
+                const num = Number(rawValue);
+                cond.value = (rawValue.trim() !== "" && !isNaN(num)) ? num : rawValue;
+            }
+            conditions.push(cond);
+        });
+        return conditions;
+    }
+
+    function resetStudioForm() {
+        document.getElementById("studio-name").value = "";
+        document.getElementById("studio-name").disabled = false;
+        document.getElementById("studio-description").value = "";
+        document.getElementById("studio-enabled").checked = true;
+        document.getElementById("studio-entry-operator").value = "AND";
+        document.getElementById("studio-exit-operator").value = "AND";
+        document.getElementById("studio-entry-confidence").value = 85;
+        document.getElementById("studio-entry-reason").value = "";
+        document.getElementById("studio-exit-confidence").value = 80;
+        document.getElementById("studio-exit-reason").value = "";
+        document.getElementById("studio-entry-conditions").innerHTML = "";
+        document.getElementById("studio-exit-conditions").innerHTML = "";
+        document.getElementById("studio-validation-errors").style.display = "none";
+        document.getElementById("studio-version-history").innerHTML = "";
+    }
+
+    async function openStudioNew() {
+        await ensureStudioSchema();
+        studioCurrentName = null;
+        resetStudioForm();
+        document.getElementById("studio-editor-title").textContent = "New Strategy";
+        document.getElementById("studio-editor-card").style.display = "block";
+        document.getElementById("studio-empty-state").style.display = "none";
+        createConditionRow("studio-entry-conditions");
+        createConditionRow("studio-exit-conditions");
+    }
+
+    async function openStudioEdit(name) {
+        await ensureStudioSchema();
+        try {
+            const res = await fetch(`${apiBase}/api/strategy-studio/strategies/${encodeURIComponent(name)}/versions`);
+            const versions = await res.json();
+            const active = versions.find(v => v.is_active) || versions[0];
+
+            studioCurrentName = name;
+            resetStudioForm();
+            document.getElementById("studio-editor-title").textContent = `Edit: ${name}`;
+            document.getElementById("studio-editor-card").style.display = "block";
+            document.getElementById("studio-empty-state").style.display = "none";
+
+            document.getElementById("studio-name").value = name;
+            document.getElementById("studio-name").disabled = true; // renaming = clone instead
+            const def = active.definition;
+            document.getElementById("studio-description").value = def.description || "";
+            document.getElementById("studio-enabled").checked = def.enabled !== false;
+
+            document.getElementById("studio-entry-operator").value = def.rules.operator;
+            (def.rules.conditions || []).forEach(c => createConditionRow("studio-entry-conditions", c));
+            const matched = (def.actions || {}).matched || {};
+            document.getElementById("studio-entry-confidence").value = matched.confidence || 85;
+            document.getElementById("studio-entry-reason").value = matched.reason || "";
+
+            if (def.exit_rules) {
+                document.getElementById("studio-exit-operator").value = def.exit_rules.operator;
+                (def.exit_rules.conditions || []).forEach(c => createConditionRow("studio-exit-conditions", c));
+            }
+            const exitAction = (def.actions || {}).exit || {};
+            document.getElementById("studio-exit-confidence").value = exitAction.confidence || 80;
+            document.getElementById("studio-exit-reason").value = exitAction.reason || "";
+
+            renderVersionHistory(versions);
+        } catch (e) {
+            console.error("Failed to open strategy for editing", e);
+        }
+    }
+
+    function renderVersionHistory(versions) {
+        const container = document.getElementById("studio-version-history");
+        container.innerHTML = "";
+        versions.sort((a, b) => b.version - a.version).forEach(v => {
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding: 0.4rem 0; border-bottom: 1px solid var(--border-glass); font-size: 0.85rem;";
+            row.innerHTML = `
+                <span>v${v.version} ${v.is_active ? '<span class="badge text-green" style="font-size:0.7rem;">ACTIVE</span>' : ''} — ${new Date(v.created_at).toLocaleString()}</span>
+                ${v.is_active ? "" : `<button class="btn-action btn-xs" data-activate-version="${v.version}">Activate</button>`}
+            `;
+            container.appendChild(row);
+        });
+        container.querySelectorAll("[data-activate-version]").forEach(btn => {
+            btn.addEventListener("click", async () => {
+                await fetch(`${apiBase}/api/strategy-studio/strategies/${encodeURIComponent(studioCurrentName)}/activate/${btn.getAttribute("data-activate-version")}`, { method: "POST" });
+                await loadStudioStrategyList();
+                await openStudioEdit(studioCurrentName);
+            });
+        });
+    }
+
+    function buildDefinitionFromForm() {
+        const name = document.getElementById("studio-name").value.trim();
+        const entryConditions = collectConditionsFromContainer("studio-entry-conditions");
+        const exitConditions = collectConditionsFromContainer("studio-exit-conditions");
+
+        const definition = {
+            name,
+            version: "1.0.0",
+            description: document.getElementById("studio-description").value,
+            enabled: document.getElementById("studio-enabled").checked,
+            rules: {
+                operator: document.getElementById("studio-entry-operator").value,
+                conditions: entryConditions,
+            },
+            actions: {
+                matched: {
+                    action: "SIGNAL_BUY",
+                    confidence: Number(document.getElementById("studio-entry-confidence").value) || 0,
+                    reason: document.getElementById("studio-entry-reason").value || "Entry rules matched.",
+                },
+            },
+        };
+
+        if (exitConditions.length > 0) {
+            definition.exit_rules = {
+                operator: document.getElementById("studio-exit-operator").value,
+                conditions: exitConditions,
+            };
+            definition.actions.exit = {
+                action: "SIGNAL_SELL",
+                confidence: Number(document.getElementById("studio-exit-confidence").value) || 0,
+                reason: document.getElementById("studio-exit-reason").value || "Exit rules matched.",
+            };
+        }
+
+        return { name, definition };
+    }
+
+    function showStudioErrors(errors) {
+        const el = document.getElementById("studio-validation-errors");
+        if (!errors || errors.length === 0) {
+            el.style.display = "none";
+            el.innerHTML = "";
+            return;
+        }
+        el.style.display = "block";
+        el.innerHTML = `<strong>Fix these before saving:</strong><ul style="margin: 0.4rem 0 0 1.2rem;">${errors.map(e => `<li>${e}</li>`).join("")}</ul>`;
+    }
+
+    async function validateStudioForm() {
+        const { name, definition } = buildDefinitionFromForm();
+        if (!name) {
+            showStudioErrors(["Strategy name is required."]);
+            return false;
+        }
+        try {
+            const res = await fetch(`${apiBase}/api/strategy-studio/validate`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ definition }),
+            });
+            const result = await res.json();
+            showStudioErrors(result.errors);
+            return result.valid;
+        } catch (e) {
+            console.error("Validation request failed", e);
+            return false;
+        }
+    }
+
+    async function saveStudioForm() {
+        const valid = await validateStudioForm();
+        if (!valid) return;
+        const { name, definition } = buildDefinitionFromForm();
+        try {
+            const res = await fetch(`${apiBase}/api/strategy-studio/strategies/${encodeURIComponent(name)}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ definition, activate: true }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                showStudioErrors(Array.isArray(err.message) ? err.message : [err.message || "Save failed."]);
+                return;
+            }
+            appendTerminalLog("dashboard_client", "strategy_studio", `Saved strategy '${name}'.`);
+            await loadStudioStrategyList();
+            await openStudioEdit(name);
+        } catch (e) {
+            console.error("Failed to save strategy", e);
+        }
+    }
+
+    async function cloneStudioStrategy(name) {
+        const newName = prompt(`Clone "${name}" as:`, `${name}_copy`);
+        if (!newName) return;
+        try {
+            const res = await fetch(`${apiBase}/api/strategy-studio/strategies/${encodeURIComponent(name)}/clone`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ new_name: newName }),
+            });
+            if (!res.ok) {
+                const err = await res.json();
+                alert(err.detail || "Clone failed.");
+                return;
+            }
+            await loadStudioStrategyList();
+            await openStudioEdit(newName);
+        } catch (e) {
+            console.error("Failed to clone strategy", e);
+        }
+    }
+
+    async function deleteStudioStrategy(name) {
+        if (!confirm(`Delete strategy "${name}" and all its versions? This can't be undone.`)) return;
+        try {
+            await fetch(`${apiBase}/api/strategy-studio/strategies/${encodeURIComponent(name)}`, { method: "DELETE" });
+            if (studioCurrentName === name) {
+                document.getElementById("studio-editor-card").style.display = "none";
+                document.getElementById("studio-empty-state").style.display = "block";
+                studioCurrentName = null;
+            }
+            await loadStudioStrategyList();
+        } catch (e) {
+            console.error("Failed to delete strategy", e);
+        }
+    }
+
+    // ── IPO Research (independent module) ───────────────────────────────────
+
+    async function loadIPOList(status) {
+        try {
+            const res = await fetch(`${apiBase}/api/ipo/dashboard/${status}`);
+            const issues = await res.json();
+            renderIPOList(issues);
+        } catch (e) {
+            console.error("Failed to load IPO list", e);
+        }
+    }
+
+    async function searchIPOs(query) {
+        if (!query) {
+            loadIPOList(activeIPOStatus);
+            return;
+        }
+        try {
+            const res = await fetch(`${apiBase}/api/ipo/dashboard/search?q=${encodeURIComponent(query)}`);
+            renderIPOList(await res.json());
+        } catch (e) {
+            console.error("Failed to search IPOs", e);
+        }
+    }
+
+    function renderIPOList(issues) {
+        const list = document.getElementById("ipo-list");
+        if (!issues || issues.length === 0) {
+            list.innerHTML = `<p style="color: var(--text-secondary); font-size: 0.85rem; padding: 0.5rem 0;">No IPOs in this category right now.</p>`;
+            return;
+        }
+        list.innerHTML = "";
+        issues.forEach(issue => {
+            const card = document.createElement("div");
+            card.className = "ipo-list-card";
+            card.style.cssText = "padding: 0.7rem; border: 1px solid var(--border-glass); border-radius: 8px; cursor: pointer;" +
+                (issue.symbol === activeIPOSymbol ? " background: rgba(0,242,254,0.08); border-color: var(--accent-blue);" : "");
+            const band = (issue.price_band_low != null && issue.price_band_high != null)
+                ? `₹${issue.price_band_low}–₹${issue.price_band_high}` : "-";
+            const lot = issue.lot_size != null ? issue.lot_size : "-";
+            card.innerHTML = `
+                <div style="display:flex; justify-content:space-between;">
+                    <strong style="font-size: 0.9rem;">${issue.company_name}</strong>
+                    <span class="badge" style="font-size: 0.7rem;">${issue.security_type || ''}</span>
+                </div>
+                <div style="font-size: 0.78rem; color: var(--text-secondary); margin-top: 0.3rem;">
+                    ${issue.symbol} &nbsp;|&nbsp; Band: ${band} &nbsp;|&nbsp; Lot: ${lot}
+                </div>
+            `;
+            card.addEventListener("click", () => selectIPO(issue.symbol));
+            list.appendChild(card);
+        });
+    }
+
+    async function selectIPO(symbol) {
+        activeIPOSymbol = symbol;
+        loadIPOList(activeIPOStatus); // re-render to highlight selection
+        document.getElementById("ipo-detail-empty").style.display = "none";
+        document.getElementById("ipo-detail-content").style.display = "block";
+        document.getElementById("ipo-recommendation-card").style.display = "none";
+        document.getElementById("ipo-analyst-reports").innerHTML = "";
+        // First open of a symbol fetches richer detail from NSE on the server
+        // (then it's cached, so re-opens are instant). Show a hint meanwhile.
+        document.getElementById("ipo-detail-fields").innerHTML =
+            `<div class="muted">Loading issue details…</div>`;
+
+        try {
+            const res = await fetch(`${apiBase}/api/ipo/dashboard/${symbol}`);
+            const issue = await res.json();
+            renderIPODetailFields(issue);
+        } catch (e) {
+            console.error("Failed to load IPO detail", e);
+        }
+
+        try {
+            const res = await fetch(`${apiBase}/api/ipo/analysis/${symbol}`);
+            if (res.ok) {
+                renderIPOAnalysis(await res.json());
+            }
+        } catch (e) {
+            // No analysis yet — fine, user can click Run Analysis.
+        }
+    }
+
+    function renderIPODetailFields(issue) {
+        document.getElementById("ipo-detail-name").textContent = `${issue.company_name} (${issue.symbol})`;
+        const band = (issue.price_band_low != null && issue.price_band_high != null)
+            ? `₹${issue.price_band_low} – ₹${issue.price_band_high}` : "Not available";
+        const fields = [
+            ["Status", issue.status],
+            ["Security Type", issue.security_type || "-"],
+            ["Price Band", band],
+            ["Lot Size", issue.lot_size != null ? issue.lot_size : "Not available"],
+            ["Min Investment", issue.min_investment != null ? `₹${issue.min_investment.toLocaleString()}` : "Not available"],
+            ["Issue Size (shares)", issue.issue_size != null ? issue.issue_size.toLocaleString() : "-"],
+            ["Open Date", issue.issue_start_date ? new Date(issue.issue_start_date).toLocaleDateString() : "-"],
+            ["Close Date", issue.issue_end_date ? new Date(issue.issue_end_date).toLocaleDateString() : "-"],
+            ["Listing Date", issue.listing_date ? new Date(issue.listing_date).toLocaleDateString() : "-"],
+            ["Listing Price", issue.listing_price != null ? `₹${issue.listing_price}` : "-"],
+        ];
+        // Richer fields from NSE's ipo-detail payload (fetched on first open,
+        // then cached). Absent until the detail fetch has run — only shown
+        // when real values exist; never a placeholder.
+        const d = issue.detail || {};
+        const crore = (rupees) => `₹${(rupees / 1e7).toLocaleString(undefined, { maximumFractionDigits: 2 })} Cr`;
+        if (d.fresh_issue_amount != null) fields.push(["Fresh Issue", crore(d.fresh_issue_amount)]);
+        if (d.ofs_amount != null) fields.push(["Offer for Sale", crore(d.ofs_amount)]);
+        if (d.total_issue_amount != null) fields.push(["Total Issue Size", crore(d.total_issue_amount)]);
+        if (d.face_value != null) fields.push(["Face Value", `₹${d.face_value}`]);
+        if (d.lead_managers) fields.push(["Lead Managers", d.lead_managers]);
+        if (d.registrar) fields.push(["Registrar", d.registrar]);
+
+        document.getElementById("ipo-detail-fields").innerHTML = fields.map(([label, value]) =>
+            `<div><strong>${label}:</strong> ${value}</div>`
+        ).join("");
+
+        if (issue.subscription_timeline && issue.subscription_timeline.length > 0) {
+            const latest = issue.subscription_timeline[issue.subscription_timeline.length - 1];
+            document.getElementById("ipo-detail-fields").innerHTML +=
+                `<div><strong>Latest Subscription:</strong> ${latest.subscription_times.toFixed(2)}x (${latest.category})</div>`;
+        }
+
+        // Official offer documents (NSE-hosted). Real links only.
+        const docs = d.documents || {};
+        const docLinks = [
+            ["Red Herring Prospectus (RHP)", docs.rhp_url],
+            ["Basis of Issue Price / Ratios", docs.ratios_url],
+            ["Anchor Allocation Report", docs.anchor_url],
+        ].filter(([, url]) => url);
+        if (docLinks.length > 0) {
+            document.getElementById("ipo-detail-fields").innerHTML +=
+                `<div class="ipo-doc-links"><strong>Official Documents:</strong> ` +
+                docLinks.map(([label, url]) =>
+                    `<a href="${url}" target="_blank" rel="noopener">${label}</a>`
+                ).join(" · ") + `</div>`;
+        }
+    }
+
+    async function runIPOAnalysis() {
+        if (!activeIPOSymbol) return;
+        const btn = document.getElementById("btn-ipo-run-analysis");
+        btn.disabled = true;
+        btn.textContent = "Analyzing...";
+        try {
+            const res = await fetch(`${apiBase}/api/ipo/analysis/${activeIPOSymbol}`, { method: "POST" });
+            const result = await res.json();
+            renderIPOAnalysis(result);
+        } catch (e) {
+            console.error("Failed to run IPO analysis", e);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Run Analysis";
+        }
+    }
+
+    function renderIPOAnalysis(result) {
+        const recCard = document.getElementById("ipo-recommendation-card");
+        recCard.style.display = "block";
+        const badge = document.getElementById("ipo-rec-badge");
+        badge.textContent = (result.recommendation || "").replace(/_/g, " ");
+        const colorClass = ["APPLY", "LISTING_GAIN_ONLY"].includes(result.recommendation) ? "text-green"
+            : result.recommendation === "AVOID" ? "text-red" : "text-orange";
+        badge.className = `badge ${colorClass}`;
+        document.getElementById("ipo-rec-reasoning").textContent = result.reasoning || "";
+        const completeness = result.data_completeness_pct;
+        document.getElementById("ipo-rec-completeness").textContent =
+            completeness != null ? `Data completeness: ${completeness}% of available analysts had real data for this IPO.` : "";
+
+        const reports = result.reports || [];
+        const container = document.getElementById("ipo-analyst-reports");
+        if (reports.length === 0) {
+            container.innerHTML = `<p style="color: var(--text-secondary); font-size: 0.85rem;">No analyst reports yet — click Run Analysis.</p>`;
+            return;
+        }
+        container.innerHTML = reports.map(r => `
+            <div style="border: 1px solid var(--border-glass); border-radius: 8px; padding: 0.7rem; margin-bottom: 0.6rem;">
+                <div style="display:flex; justify-content:space-between;">
+                    <strong style="font-size: 0.88rem;">${r.analyst_name}</strong>
+                    <span>Score: <b>${r.score.toFixed(0)}</b>/100 &nbsp; Confidence: ${r.confidence.toFixed(0)}%</span>
+                </div>
+                <p style="font-size: 0.82rem; color: var(--text-secondary); margin: 0.4rem 0;">${r.reason}</p>
+                ${r.advantages && r.advantages.length ? `<div class="text-green" style="font-size: 0.78rem;">+ ${r.advantages.join(" · ")}</div>` : ""}
+                ${r.risks && r.risks.length ? `<div class="text-red" style="font-size: 0.78rem;">- ${r.risks.join(" · ")}</div>` : ""}
+            </div>
+        `).join("");
+    }
+
+    async function loadIPOAccuracy() {
+        try {
+            const res = await fetch(`${apiBase}/api/ipo/history/accuracy`);
+            const summary = await res.json();
+            const badge = document.getElementById("ipo-accuracy-badge");
+            if (summary.total_judged === 0) {
+                badge.textContent = "Accuracy: not enough listed IPOs judged yet";
+            } else {
+                badge.textContent = `Accuracy: ${summary.accuracy_pct}% (${summary.total_judged} judged)`;
+            }
+        } catch (e) {
+            console.error("Failed to load IPO accuracy", e);
+        }
+    }
+
+    async function refreshIPOData() {
+        const btn = document.getElementById("btn-ipo-refresh");
+        btn.disabled = true;
+        btn.textContent = "Refreshing...";
+        try {
+            await fetch(`${apiBase}/api/ipo/collector/refresh`, { method: "POST" });
+            await loadIPOList(activeIPOStatus);
+            await loadIPOAccuracy();
+        } catch (e) {
+            console.error("Failed to refresh IPO data", e);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Refresh Live Data";
+        }
     }
 
     // Fetch employee registry
@@ -285,7 +1684,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 empSelect.appendChild(opt);
             });
-            renderMonitoringPage(data.employees);
+            lastEmployeeList = data.employees;
+            const relevantOnlyChk = document.getElementById("chk-relevant-only");
+            if (relevantOnlyChk && relevantOnlyChk.checked) {
+                applyEmployeeRelevanceFilter();
+            } else {
+                renderMonitoringPage(data.employees);
+            }
             renderPerformancePage(data.employees);
         } catch (e) {
             console.error("Failed to fetch employee registry", e);
@@ -356,18 +1761,9 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch(`${apiBase}/api/health/status`);
             const health = await res.json();
-            updateTelemetryUI(health);
-        } catch (e) {
-            console.error("Failed to fetch telemetry data", e);
-        }
-    }
 
-    function updateTelemetryUI(health) {
-        if (!health) return;
-        
-        // Status bar health
-        const healthEl = document.getElementById("top-health");
-        if (healthEl) {
+            // Status bar health
+            const healthEl = document.getElementById("top-health");
             healthEl.textContent = health.overall_system_health;
             if (health.overall_system_health === "HEALTHY") {
                 healthEl.className = "value text-green";
@@ -376,31 +1772,25 @@ document.addEventListener("DOMContentLoaded", () => {
             } else {
                 healthEl.className = "value text-red";
             }
+
+            // CPU
+            document.getElementById("sys-cpu-val").textContent = `${health.cpu_usage_pct}%`;
+            document.getElementById("sys-cpu-fill").style.width = `${health.cpu_usage_pct}%`;
+
+            // Memory
+            document.getElementById("sys-mem-val").textContent = `${health.memory_usage_pct}%`;
+            document.getElementById("sys-mem-fill").style.width = `${health.memory_usage_pct}%`;
+
+            // Latencies
+            document.getElementById("sys-net-latency").textContent = `${health.latency.internet_latency_ms}ms`;
+            document.getElementById("sys-broker-latency").textContent = `${health.latency.broker_latency_ms}ms`;
+            document.getElementById("sys-db-latency").textContent = `${health.latency.database_latency_ms}ms`;
+            
+            // Queue size
+            document.getElementById("sys-queue-size").textContent = health.event_queue_health.event_bus_queue_size;
+        } catch (e) {
+            console.error("Failed to fetch telemetry data", e);
         }
-
-        // CPU
-        const cpuVal = document.getElementById("sys-cpu-val");
-        const cpuFill = document.getElementById("sys-cpu-fill");
-        if (cpuVal) cpuVal.textContent = `${health.cpu_usage_pct}%`;
-        if (cpuFill) cpuFill.style.width = `${health.cpu_usage_pct}%`;
-
-        // Memory
-        const memVal = document.getElementById("sys-mem-val");
-        const memFill = document.getElementById("sys-mem-fill");
-        if (memVal) memVal.textContent = `${health.memory_usage_pct}%`;
-        if (memFill) memFill.style.width = `${health.memory_usage_pct}%`;
-
-        // Latencies
-        const netLat = document.getElementById("sys-net-latency");
-        const brokerLat = document.getElementById("sys-broker-latency");
-        const dbLat = document.getElementById("sys-db-latency");
-        if (netLat) netLat.textContent = `${health.latency.internet_latency_ms}ms`;
-        if (brokerLat) brokerLat.textContent = `${health.latency.broker_latency_ms}ms`;
-        if (dbLat) dbLat.textContent = `${health.latency.database_latency_ms}ms`;
-        
-        // Queue size
-        const qSize = document.getElementById("sys-queue-size");
-        if (qSize) qSize.textContent = health.event_queue_health.event_bus_queue_size;
     }
 
     // Fetch portfolio summary
@@ -408,28 +1798,24 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch(`${apiBase}/api/portfolio/summary`);
             const sum = await res.json();
-            updatePortfolioSummaryUI(sum);
+
+            document.getElementById("card-capital").textContent = `₹${sum.available_capital.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            
+            const portfolioVal = sum.available_capital + sum.mtm;
+            document.getElementById("card-portfolio-val").textContent = `₹${portfolioVal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            
+            const todayPnlEl = document.getElementById("card-today-pnl");
+            todayPnlEl.textContent = `${sum.realized_pnl >= 0 ? '+' : ''}₹${sum.realized_pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            todayPnlEl.className = sum.realized_pnl >= 0 ? "value text-green" : "value text-red";
+
+            const totalPnlEl = document.getElementById("card-total-pnl");
+            totalPnlEl.textContent = `${sum.mtm >= 0 ? '+' : ''}₹${sum.mtm.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+            totalPnlEl.className = sum.mtm >= 0 ? "value text-green" : "value text-red";
+
+            document.getElementById("card-margin").textContent = `₹${sum.utilized_margin.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
         } catch (e) {
             console.error("Failed to fetch portfolio summary", e);
         }
-    }
-
-    function updatePortfolioSummaryUI(sum) {
-        if (!sum) return;
-        document.getElementById("card-capital").textContent = `₹${sum.available_capital.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-        
-        const portfolioVal = sum.available_capital + sum.mtm;
-        document.getElementById("card-portfolio-val").textContent = `₹${portfolioVal.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-        
-        const todayPnlEl = document.getElementById("card-today-pnl");
-        todayPnlEl.textContent = `${sum.realized_pnl >= 0 ? '+' : ''}₹${sum.realized_pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-        todayPnlEl.className = sum.realized_pnl >= 0 ? "value text-green" : "value text-red";
-
-        const totalPnlEl = document.getElementById("card-total-pnl");
-        totalPnlEl.textContent = `${sum.mtm >= 0 ? '+' : ''}₹${sum.mtm.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-        totalPnlEl.className = sum.mtm >= 0 ? "value text-green" : "value text-red";
-
-        document.getElementById("card-margin").textContent = `₹${sum.utilized_margin.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     }
 
     // Fetch active positions
@@ -437,18 +1823,25 @@ document.addEventListener("DOMContentLoaded", () => {
         try {
             const res = await fetch(`${apiBase}/api/portfolio/positions`);
             const data = await res.json();
-            
+
+            latestOpenPositions = data.open_positions;
+            updateMySymbolCard();
+
             document.getElementById("card-open-pos").textContent = data.open_positions.length;
             document.getElementById("card-closed-trades").textContent = data.closed_positions.length;
 
             const posBody = document.getElementById("positions-body");
-            posBody.innerHTML = "";
-            
+
             if (data.open_positions.length === 0) {
-                posBody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">No open positions.</td></tr>`;
+                // Atomic swap (replaceChildren) — never leave the table empty
+                // mid-refresh, which is what caused the flicker.
+                const empty = document.createElement("tr");
+                empty.innerHTML = `<td colspan="8" class="text-center text-muted">No open positions.</td>`;
+                posBody.replaceChildren(empty);
                 return;
             }
 
+            const frag = document.createDocumentFragment();
             data.open_positions.forEach(p => {
                 const tr = document.createElement("tr");
                 const pnlClass = p.unrealized_pnl >= 0 ? "text-green" : "text-red";
@@ -462,8 +1855,9 @@ document.addEventListener("DOMContentLoaded", () => {
                     <td>-</td>
                     <td><button class="btn-danger btn-xs" onclick="exitPosition('${p.symbol}', '${p.side}', ${p.quantity})">Exit</button></td>
                 `;
-                posBody.appendChild(tr);
+                frag.appendChild(tr);
             });
+            posBody.replaceChildren(frag);
         } catch (e) {
             console.error("Failed to fetch open positions", e);
         }
@@ -487,7 +1881,6 @@ document.addEventListener("DOMContentLoaded", () => {
             const r = await res.json();
             appendTerminalLog("execution_engine", "exit_position", `Closed position in ${symbol}.`);
             await refreshTables();
-            await fetchPaperStatus();
         } catch (e) {
             console.error("Failed to exit position", e);
         }
@@ -500,28 +1893,31 @@ document.addEventListener("DOMContentLoaded", () => {
             const trades = await res.json();
             
             const tradesBody = document.getElementById("trades-body");
-            tradesBody.innerHTML = "";
 
             if (trades.length === 0) {
-                tradesBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">No closed trades.</td></tr>`;
+                // Atomic swap — no empty-then-fill flicker on the 3s refresh.
+                const empty = document.createElement("tr");
+                empty.innerHTML = `<td colspan="7" class="text-center text-muted">No closed trades.</td>`;
+                tradesBody.replaceChildren(empty);
                 return;
             }
 
+            const frag = document.createDocumentFragment();
             trades.forEach(t => {
                 const tr = document.createElement("tr");
-                const realizedPnl = typeof t.realized_pnl === 'number' ? t.realized_pnl : 0.0;
-                const pnlClass = realizedPnl >= 0 ? "text-green" : "text-red";
+                const pnlClass = t.realized_pnl >= 0 ? "text-green" : "text-red";
                 tr.innerHTML = `
                     <td><b>${t.symbol}</b></td>
                     <td><span class="${t.side === 'BUY' ? 'text-green' : 'text-red'}">${t.side}</span></td>
                     <td>${t.quantity}</td>
                     <td>₹${t.price.toFixed(2)}</td>
                     <td>₹${t.commission.toFixed(4)}</td>
-                    <td class="${pnlClass}">₹${realizedPnl.toFixed(2)}</td>
+                    <td class="${pnlClass}">₹${t.realized_pnl.toFixed(2)}</td>
                     <td>${new Date(t.executed_at).toLocaleTimeString()}</td>
                 `;
-                tradesBody.appendChild(tr);
+                frag.appendChild(tr);
             });
+            tradesBody.replaceChildren(frag);
         } catch (e) {
             console.error("Failed to fetch closed trades", e);
         }
@@ -557,90 +1953,195 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
-    // Select Active Watchlist Symbol
-    window.selectSymbol = function(symbol) {
-        selectedSymbol = symbol;
-        document.querySelectorAll(".price-card").forEach(c => {
-            if (c.id === `price-card-${symbol}`) {
-                c.classList.add("active-symbol");
-            } else {
-                c.classList.remove("active-symbol");
-            }
-        });
-        
-        // Refresh intelligence blocks
-        fetchVolumeIntelligenceData();
-        fetchOptionFlowData();
-        fetchTrendIntelData();
-        
-        appendTerminalLog("system", "select_symbol", `Selected active monitor symbol: ${symbol}`);
-    };
+    // Kotak Neo feed connection status — no simulated fallback, so when the
+    // feed is down we show "Waiting for live market feed..." instead of stale/fake prices.
+    // Distinct from "Market Closed", which means the feed is fine but there's
+    // genuinely no session right now (checked via fetchFeedStatus's market_session).
+    function setFeedStatus(connected) {
+        const badge = document.getElementById("feed-status-badge");
+        const groups = document.getElementById("market-groups");
+        if (badge) {
+            badge.textContent = connected ? "Feed Connected" : "Feed Disconnected";
+            badge.classList.toggle("feed-connected", connected);
+            badge.classList.toggle("feed-disconnected", !connected);
+        }
+        if (groups) {
+            groups.classList.toggle("feed-is-disconnected", !connected);
+            if (connected) groups.classList.remove("market-is-closed");
+        }
+        if (!connected) {
+            marketDataStore = {};
+            const commodityRow = document.getElementById("prices-row-commodity");
+            if (commodityRow) commodityRow.innerHTML = "";
+            renderMarketIndices();
+            renderTopGainersLosers();
+        }
+    }
 
-    // Live price widget
-    function updatePriceWidget(tick) {
-        const { symbol, close } = tick;
-        const prevPrice = activePrices[symbol];
-        activePrices[symbol] = close;
-
-        let card = document.getElementById(`price-card-${symbol}`);
-        if (!card) {
-            card = document.createElement("div");
-            card.id = `price-card-${symbol}`;
-            card.className = `price-card ${symbol === selectedSymbol ? 'active-symbol' : ''}`;
-            card.innerHTML = `
-                <div class="symbol">${symbol}</div>
-                <div class="price" id="price-val-${symbol}">₹${close.toFixed(2)}</div>
-                <div class="change text-green" id="price-change-${symbol}">+0.00%</div>
-            `;
-            card.addEventListener("click", () => selectSymbol(symbol));
-            document.getElementById("prices-row").appendChild(card);
+    function setMarketClosed(closed) {
+        const groups = document.getElementById("market-groups");
+        if (!groups) return;
+        // Market Closed only makes sense to show when the feed itself is fine —
+        // if the feed is actually down, that overlay already takes priority.
+        if (closed && !groups.classList.contains("feed-is-disconnected")) {
+            groups.classList.add("market-is-closed");
         } else {
-            const priceVal = document.getElementById(`price-val-${symbol}`);
-            const priceChange = document.getElementById(`price-change-${symbol}`);
-            priceVal.textContent = `₹${close.toFixed(2)}`;
+            groups.classList.remove("market-is-closed");
+        }
+    }
 
-            if (prevPrice) {
-                const diff = close - prevPrice;
-                const percent = (diff / prevPrice) * 100;
-                priceChange.textContent = `${percent >= 0 ? '+' : ''}${percent.toFixed(2)}%`;
-                if (diff >= 0) {
-                    priceChange.className = "change text-green";
-                    priceVal.style.color = "var(--accent-green)";
-                } else {
-                    priceChange.className = "change text-red";
-                    priceVal.style.color = "var(--accent-red)";
-                }
-                setTimeout(() => { priceVal.style.color = ""; }, 300);
-            }
+    async function fetchFeedStatus() {
+        try {
+            const res = await fetch(`${apiBase}/api/market/feed`);
+            const data = await res.json();
+            setFeedStatus(!!data.stream_connected);
+            setMarketClosed(data.market_session !== "OPEN");
+        } catch (e) {
+            console.error("Failed to fetch feed status", e);
+            setFeedStatus(false);
+        }
+    }
+
+    // Briefly flashes an element green/up or red/down when its value changes.
+    function flashElement(el, direction) {
+        if (!el || !direction) return;
+        el.classList.remove("flash-up", "flash-down");
+        // Force reflow so the animation restarts even if it fires again quickly.
+        void el.offsetWidth;
+        el.classList.add(direction === "up" ? "flash-up" : "flash-down");
+    }
+
+    function populateSearchAndFocus(symbol) {
+        const input = document.getElementById("market-search");
+        if (!input) return;
+        input.value = symbol;
+        input.dispatchEvent(new Event("input"));
+        input.scrollIntoView({ behavior: "smooth", block: "center" });
+        input.focus();
+    }
+
+    // Live price widget — the single entry point every tick flows through.
+    // Updates the central store, then re-renders only the widget(s) that symbol
+    // belongs to (Market Indices / Commodity Watch / Top Gainers-Losers).
+    function updatePriceWidget(tick) {
+        const symbol = tick.symbol;
+        const ltp = typeof tick.ltp === "number" ? tick.ltp : parseFloat(tick.ltp);
+        if (!symbol || Number.isNaN(ltp)) return;
+
+        const prevEntry = marketDataStore[symbol];
+        const prevLtp = prevEntry ? prevEntry.ltp : undefined;
+        const prevClose = (prevEntry && prevEntry.prevClose) || tick.prev_close || ltp;
+        const change = prevClose ? ltp - prevClose : 0;
+        const changePct = prevClose ? (change / prevClose) * 100 : 0;
+
+        marketDataStore[symbol] = {
+            ltp, change, changePct, prevClose,
+            volume: typeof tick.volume === "number" ? tick.volume : (prevEntry ? prevEntry.volume : 0),
+        };
+
+        const direction = prevLtp === undefined ? null : (ltp > prevLtp ? "up" : ltp < prevLtp ? "down" : null);
+
+        if (INDEX_SYMBOLS.includes(symbol)) {
+            renderMarketIndices();
+            flashElement(document.getElementById(`index-card-${symbol}`), direction);
+            return;
         }
 
-        recalculateGainersLosers();
+        const segment = symbolSegments[symbol];
+        if (segment === "COMMODITY") {
+            renderCommodityWatch();
+            flashElement(document.getElementById(`price-card-${symbol}`), direction);
+            return;
+        }
+
+        if (segment === "EQUITY") {
+            renderTopGainersLosers();
+        }
     }
 
-    function recalculateGainersLosers() {
-        const tickers = Object.keys(activePrices).map(sym => {
-            const priceEl = document.getElementById(`price-change-${sym}`);
-            const pct = priceEl ? parseFloat(priceEl.textContent) : 0.0;
-            return { symbol: sym, pct };
-        });
-
-        tickers.sort((a, b) => b.pct - a.pct);
-        
-        const gainers = tickers.filter(t => t.pct > 0).slice(0, 3);
-        const losers = [...tickers].reverse().filter(t => t.pct < 0).slice(0, 3);
-
-        const gContainer = document.getElementById("top-gainers");
-        gContainer.innerHTML = gainers.length > 0 ? "" : "-";
-        gainers.forEach(g => {
-            gContainer.innerHTML += `<div style="display:flex; justify-content:space-between"><span>${g.symbol}</span><span class="text-green">+${g.pct.toFixed(2)}%</span></div>`;
-        });
-
-        const lContainer = document.getElementById("top-losers");
-        lContainer.innerHTML = losers.length > 0 ? "" : "-";
-        losers.forEach(l => {
-            lContainer.innerHTML += `<div style="display:flex; justify-content:space-between"><span>${l.symbol}</span><span class="text-red">${l.pct.toFixed(2)}%</span></div>`;
-        });
+    // ── Market Indices panel ──────────────────────────────────────────────────
+    function renderMarketIndices() {
+        const row = document.getElementById("indices-row");
+        if (!row) return;
+        row.innerHTML = INDEX_SYMBOLS.map(sym => {
+            const d = marketDataStore[sym];
+            const label = INDEX_LABELS[sym] || sym;
+            if (!d) {
+                return `<div class="index-card" id="index-card-${sym}">
+                    <div class="index-name">${label}</div>
+                    <div class="index-ltp text-muted">—</div>
+                    <div class="index-change text-muted">Waiting for tick...</div>
+                </div>`;
+            }
+            const cls = d.change >= 0 ? "text-green" : "text-red";
+            const sign = d.change >= 0 ? "+" : "";
+            return `<div class="index-card" id="index-card-${sym}">
+                <div class="index-name">${label}</div>
+                <div class="index-ltp">${d.ltp.toFixed(2)}</div>
+                <div class="index-change ${cls}">${sign}${d.change.toFixed(2)} (${sign}${d.changePct.toFixed(2)}%)</div>
+            </div>`;
+        }).join("");
     }
+
+    // ── Commodity Watch panel ─────────────────────────────────────────────────
+    function renderCommodityWatch() {
+        const row = document.getElementById("prices-row-commodity");
+        if (!row) return;
+        row.innerHTML = COMMODITY_SYMBOLS.map(sym => {
+            const d = marketDataStore[sym];
+            if (!d) {
+                return `<div class="price-card" id="price-card-${sym}">
+                    <div class="symbol">${sym}</div>
+                    <div class="price text-muted">—</div>
+                    <div class="change text-muted">Waiting for tick...</div>
+                </div>`;
+            }
+            const cls = d.change >= 0 ? "text-green" : "text-red";
+            const sign = d.change >= 0 ? "+" : "";
+            return `<div class="price-card" id="price-card-${sym}">
+                <div class="symbol">${sym}</div>
+                <div class="price">₹${d.ltp.toFixed(2)}</div>
+                <div class="change ${cls}">${sign}${d.change.toFixed(2)} (${sign}${d.changePct.toFixed(2)}%)</div>
+            </div>`;
+        }).join("");
+    }
+
+    // ── Top Gainers / Top Losers panels ───────────────────────────────────────
+    function renderTopGainersLosers() {
+        const equitySymbols = Object.keys(symbolSegments).filter(sym => symbolSegments[sym] === "EQUITY");
+        const ranked = equitySymbols
+            .filter(sym => marketDataStore[sym])
+            .map(sym => ({ symbol: sym, ...marketDataStore[sym] }));
+
+        ranked.sort((a, b) => b.changePct - a.changePct);
+        const gainers = ranked.filter(r => r.changePct > 0).slice(0, 10);
+        const losers = ranked.filter(r => r.changePct < 0).slice(-10).reverse();
+
+        renderRankedTable("top-gainers-body", gainers, "up");
+        renderRankedTable("top-losers-body", losers, "down");
+    }
+
+    function renderRankedTable(tbodyId, rows, direction) {
+        const tbody = document.getElementById(tbodyId);
+        if (!tbody) return;
+        if (rows.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="3" class="mini-table-empty">-</td></tr>`;
+            return;
+        }
+        const icon = direction === "up" ? "▲" : "▼";
+        const cls = direction === "up" ? "text-green" : "text-red";
+        tbody.innerHTML = rows.map(r => `
+            <tr onclick="window.selectMarketSymbol('${r.symbol}')">
+                <td class="sym-cell">${r.symbol}</td>
+                <td>${r.ltp.toFixed(2)}</td>
+                <td class="${cls}">${icon} ${r.changePct.toFixed(2)}%</td>
+            </tr>
+        `).join("");
+    }
+
+    window.selectMarketSymbol = function(symbol) {
+        populateSearchAndFocus(symbol);
+    };
 
     // Logs rendering & filtering
     function matchesFilter(sender, topic, filter) {
@@ -680,7 +2181,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function appendTerminalLog(sender, topic, dataStr, customStyle = "") {
         const terminal = document.getElementById("terminal-logs");
-        if (!terminal) return;
         const entry = document.createElement("div");
         entry.className = "log-entry";
         const time = new Date().toLocaleTimeString();
@@ -700,7 +2200,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchVolumeIntelligenceData() {
         try {
-            const res = await fetch(`${apiBase}/api/volume_intelligence/status?symbol=${selectedSymbol}`);
+            const symbol = "BTCUSD"; // Default symbol or select active symbol
+            const res = await fetch(`${apiBase}/api/volume_intelligence/status?symbol=${symbol}`);
             const data = await res.json();
             updateVolumeIntelligenceUI(data);
         } catch (e) {
@@ -730,7 +2231,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchOptionFlowData() {
         try {
-            const res = await fetch(`${apiBase}/api/option_flow/status?symbol=${selectedSymbol}`);
+            const symbol = "NIFTY50";
+            const res = await fetch(`${apiBase}/api/option_flow/status?symbol=${symbol}`);
             const data = await res.json();
             updateOptionFlowUI(data);
         } catch (e) {
@@ -791,7 +2293,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     async function fetchTrendIntelData() {
         try {
-            const res = await fetch(`${apiBase}/api/trend_intelligence/status?symbol=${selectedSymbol}`);
+            const symbol = "NIFTY50";
+            const res = await fetch(`${apiBase}/api/trend_intelligence/status?symbol=${symbol}`);
             const data = await res.json();
             updateTrendIntelUI(data);
         } catch (e) {
@@ -1050,6 +2553,7 @@ document.addEventListener("DOMContentLoaded", () => {
             historyLabels = accHistory.map((h, idx) => `Sig ${idx + 1}`);
             historyData = accHistory.map(h => h.accuracy_pct);
         } else {
+            // Default baseline values
             historyLabels = ['Sig 1', 'Sig 2', 'Sig 3', 'Sig 4', 'Sig 5'];
             historyData = [100, 100, 100, 100, 100];
         }
@@ -1245,6 +2749,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     }
 
+    // Set up live filter search input
     document.getElementById("decisions-search")?.addEventListener("input", renderDecisionLog);
 
     window.clearDecisionLog = function() {
@@ -1261,6 +2766,9 @@ document.addEventListener("DOMContentLoaded", () => {
             document.getElementById("settings-active-broker").value = data.active_broker;
             document.getElementById("settings-client-id").value = data.client_id;
             document.getElementById("settings-api-key").value = data.api_key;
+            document.getElementById("settings-mobile-number").value = data.mobile_number || "";
+            document.getElementById("settings-mpin").value = data.mpin || "";
+            document.getElementById("settings-totp-secret").value = data.totp_secret || "";
             document.getElementById("settings-max-daily-loss").value = Math.round(data.max_daily_loss);
             document.getElementById("settings-max-exposure").value = Math.round(data.max_exposure);
             
@@ -1297,6 +2805,9 @@ document.addEventListener("DOMContentLoaded", () => {
             active_broker: document.getElementById("settings-active-broker").value,
             client_id: document.getElementById("settings-client-id").value,
             api_key: document.getElementById("settings-api-key").value,
+            mobile_number: document.getElementById("settings-mobile-number").value,
+            mpin: document.getElementById("settings-mpin").value,
+            totp_secret: document.getElementById("settings-totp-secret").value,
             max_daily_loss: parseFloat(document.getElementById("settings-max-daily-loss").value || 0),
             max_exposure: parseFloat(document.getElementById("settings-max-exposure").value || 0)
         };
@@ -1316,6 +2827,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 }
                 appendTerminalLog("system", "config_update", `Active broker switched to ${payload.active_broker}. Risk metrics updated.`);
                 
+                // Refresh top metrics & safety status
                 fetchBrokerStatus();
                 fetchSafetyData();
                 fetchEmployeeData();
@@ -1334,141 +2846,389 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     };
 
-    // --- PAPER TRADING CONTROLS ---
-    async function fetchPaperStatus() {
-        try {
-            const res = await fetch(`${apiBase}/api/paper/status`);
-            const data = await res.json();
-            
-            document.getElementById("paper-sess-id").textContent = data.session_id || "-";
-            
-            const statusEl = document.getElementById("paper-sess-status");
-            statusEl.textContent = data.is_running ? "ACTIVE" : "STOPPED";
-            statusEl.className = `badge ${data.is_running ? "text-green" : "text-red"}`;
-            
-            document.getElementById("paper-capital").textContent = `₹${data.virtual_capital.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-            
-            const pnlEl = document.getElementById("paper-pnl");
-            pnlEl.textContent = `${data.virtual_pnl >= 0 ? '+' : ''}₹${data.virtual_pnl.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
-            pnlEl.className = data.virtual_pnl >= 0 ? "value text-green" : "value text-red";
-            
-            document.getElementById("paper-trades-count").textContent = data.trades_executed;
-            document.getElementById("paper-win-rate").textContent = `${data.win_rate.toFixed(1)}%`;
-            
-            // Populate paper positions
-            const posRes = await fetch(`${apiBase}/api/portfolio/positions`);
-            const posData = await posRes.json();
-            const paperPosBody = document.getElementById("paper-positions-body");
-            
-            paperPosBody.innerHTML = "";
-            if (posData.open_positions.length === 0) {
-                paperPosBody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">No open virtual positions. Start a session to trade.</td></tr>`;
-            } else {
-                posData.open_positions.forEach(p => {
-                    const tr = document.createElement("tr");
-                    const pnlClass = p.unrealized_pnl >= 0 ? "text-green" : "text-red";
-                    tr.innerHTML = `
-                        <td><b>${p.symbol}</b></td>
-                        <td><span class="${p.side === 'BUY' ? 'text-green' : 'text-red'}">${p.side}</span></td>
-                        <td>${p.quantity}</td>
-                        <td>₹${p.avg_price.toFixed(2)}</td>
-                        <td>₹${p.ltp.toFixed(2)}</td>
-                        <td class="${pnlClass}">₹${p.unrealized_pnl.toFixed(2)}</td>
-                        <td><button class="btn-danger btn-xs" onclick="exitPosition('${p.symbol}', '${p.side}', ${p.quantity})">Exit</button></td>
-                    `;
-                    paperPosBody.appendChild(tr);
-                });
-            }
-        } catch (e) {
-            console.error("Failed to fetch paper status", e);
-        }
-    }
-    window.fetchPaperStatus = fetchPaperStatus;
-
-    window.startPaperSession = async function(event) {
-        if (event) event.preventDefault();
-        const statusMsg = document.getElementById("paper-status-msg");
-        if (statusMsg) {
-            statusMsg.textContent = "Starting session...";
-            statusMsg.style.color = "var(--text-secondary)";
-        }
+    // --- SaaS Authentication Handlers ---
+    window.toggleAuthForm = function(form) {
+        const loginCard = document.getElementById("auth-login-card");
+        const registerCard = document.getElementById("auth-register-card");
+        const resetCard = document.getElementById("auth-reset-card");
         
-        const payload = {
-            initial_capital: parseFloat(document.getElementById("paper-init-capital").value || 1000000),
-            latency_ms: parseFloat(document.getElementById("paper-latency").value || 50),
-            slippage_pct: parseFloat(document.getElementById("paper-slippage").value || 0.05) / 100,
-            spread_pct: parseFloat(document.getElementById("paper-spread").value || 0.02) / 100
-        };
+        loginCard.style.display = "none";
+        registerCard.style.display = "none";
+        if (resetCard) resetCard.style.display = "none";
         
-        try {
-            const res = await fetch(`${apiBase}/api/paper/start`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            });
-            const r = await res.json();
-            if (res.ok && r.status === "SUCCESS") {
-                if (statusMsg) {
-                    statusMsg.textContent = "🚀 Paper Trading Session Started!";
-                    statusMsg.style.color = "var(--accent-green)";
-                }
-                appendTerminalLog("system", "paper_start", `Paper trading session started: ${r.session_id}`);
-                
-                const selectBroker = document.getElementById("settings-active-broker");
-                if (selectBroker) {
-                    selectBroker.value = "paper_broker";
-                    toggleCredentialsVisibility();
-                }
-                
-                fetchPaperStatus();
-                fetchBrokerStatus();
-                refreshTables();
-            } else {
-                if (statusMsg) {
-                    statusMsg.textContent = `Error: ${r.detail || 'Start failed'}`;
-                    statusMsg.style.color = "var(--accent-red)";
-                }
-            }
-        } catch (e) {
-            console.error("Failed to start paper session", e);
-            if (statusMsg) {
-                statusMsg.textContent = "Failed to communicate with server.";
-                statusMsg.style.color = "var(--accent-red)";
-            }
+        if (form === "login") {
+            loginCard.style.display = "block";
+        } else if (form === "register") {
+            registerCard.style.display = "block";
+            updatePlanDetails();
+        } else if (form === "reset-password") {
+            if (resetCard) resetCard.style.display = "block";
         }
     };
 
-    window.stopPaperSession = async function() {
-        const statusMsg = document.getElementById("paper-status-msg");
-        if (statusMsg) {
-            statusMsg.textContent = "Stopping session...";
-            statusMsg.style.color = "var(--text-secondary)";
+    window.updatePlanDetails = function() {
+        const plan = document.getElementById("register-plan").value;
+        const priceEl = document.getElementById("plan-price");
+        const featuresEl = document.getElementById("plan-features-list");
+        
+        if (plan === "FREE") {
+            priceEl.textContent = "₹0 / Free Trial";
+            featuresEl.innerHTML = `
+                <li>✓ Access to Spot Equity segment</li>
+                <li>✓ Standard Order execution</li>
+                <li>✗ Restricted: Options & Commodity trading</li>
+                <li>✗ Restricted: Premium Volume Intelligence</li>
+            `;
+        } else if (plan === "SILVER") {
+            priceEl.textContent = "₹999 / Month";
+            featuresEl.innerHTML = `
+                <li>✓ Access to Spot Equity segment</li>
+                <li>✓ Standard Order execution</li>
+                <li>✓ Trend Intelligence AI Employee</li>
+                <li>✗ Restricted: Options & Commodity trading</li>
+                <li>✗ Restricted: Premium Volume Intelligence</li>
+            `;
+        } else if (plan === "GOLD") {
+            priceEl.textContent = "₹2,499 / Month";
+            featuresEl.innerHTML = `
+                <li>✓ Access to Spot Equity segment</li>
+                <li>✓ Standard Order execution</li>
+                <li>✓ Trend Intelligence AI Employee</li>
+                <li>✓ Volume Intelligence AI Employee</li>
+                <li>✗ Restricted: Options & Commodity trading</li>
+            `;
+        } else if (plan === "PLATINUM") {
+            priceEl.textContent = "₹4,999 / Month";
+            featuresEl.innerHTML = `
+                <li>✓ Full Access to Equity, Options & Commodities</li>
+                <li>✓ All AI Employee Specialists active</li>
+                <li>✓ High-priority Order Execution Queue</li>
+                <li>✓ Premium 24/7 Enterprise Support</li>
+            `;
         }
+    };
+
+    window.handleAuthSubmit = async function(event, mode) {
+        event.preventDefault();
+        const email = document.getElementById(`${mode}-email`).value;
+        const password = document.getElementById(`${mode}-password`).value;
+        const errorEl = document.getElementById(`${mode}-error-msg`);
+        errorEl.style.display = "none";
         
         try {
-            const res = await fetch(`${apiBase}/api/paper/stop`, { method: "POST" });
-            const r = await res.json();
-            if (res.ok && r.status === "SUCCESS") {
-                if (statusMsg) {
-                    statusMsg.textContent = "🛑 Paper Session Stopped.";
-                    statusMsg.style.color = "var(--accent-red)";
+            if (mode === "login") {
+                const res = await originalFetch(`${apiBase}/api/auth/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email, password })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    // HTTPExceptions carry `detail`; unhandled 500s carry `message`.
+                    throw new Error(data.detail || data.message || "Invalid email or password.");
                 }
-                appendTerminalLog("system", "paper_stop", "Paper trading session stopped.");
-                fetchPaperStatus();
-                fetchBrokerStatus();
-                refreshTables();
+                
+                localStorage.setItem("access_token", data.access_token);
+                window.location.reload();
+            } else if (mode === "reset") {
+                const phone = document.getElementById("reset-phone").value;
+                const res = await originalFetch(`${apiBase}/api/auth/reset-password`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email, phone, new_password: password })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.detail || data.message || "Password reset failed.");
+                }
+                
+                // Show success status on login page and switch back
+                toggleAuthForm("login");
+                const loginErr = document.getElementById("login-error-msg");
+                loginErr.textContent = "Password reset successfully! Please log in.";
+                loginErr.style.color = "var(--accent-green)";
+                loginErr.style.display = "block";
             } else {
-                if (statusMsg) {
-                    statusMsg.textContent = `Error: ${r.detail || 'Stop failed'}`;
-                    statusMsg.style.color = "var(--accent-red)";
+                const phone = document.getElementById("register-phone").value;
+                const plan_tier = document.getElementById("register-plan").value;
+                const res = await originalFetch(`${apiBase}/api/auth/register`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email, phone, password, plan_tier })
+                });
+                const data = await res.json();
+                if (!res.ok) {
+                    throw new Error(data.detail || data.message || "Registration failed.");
+                }
+                
+                // Automatically login
+                const loginRes = await originalFetch(`${apiBase}/api/auth/login`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email, password })
+                });
+                const loginData = await loginRes.json();
+                if (loginRes.ok) {
+                    localStorage.setItem("access_token", loginData.access_token);
+                    window.location.reload();
+                } else {
+                    toggleAuthForm("login");
+                    const loginErr = document.getElementById("login-error-msg");
+                    loginErr.textContent = "Registration successful! Please log in.";
+                    loginErr.style.color = "var(--accent-green)";
+                    loginErr.style.display = "block";
                 }
             }
         } catch (e) {
-            console.error("Failed to stop paper session", e);
-            if (statusMsg) {
-                statusMsg.textContent = "Failed to communicate with server.";
-                statusMsg.style.color = "var(--accent-red)";
-            }
+            errorEl.textContent = e.message;
+            errorEl.style.display = "block";
         }
+    };
+
+    async function fetchUserProfile() {
+        try {
+            const res = await fetch(`${apiBase}/api/auth/current`);
+            if (res.ok) {
+                const data = await res.json();
+                
+                // Display in Badge
+                const badge = document.getElementById("current-plan-badge");
+                if (badge) {
+                    badge.textContent = data.plan_tier;
+                    if (data.plan_tier === "FREE") {
+                        badge.style.background = "rgba(107, 114, 128, 0.15)";
+                        badge.style.color = "var(--text-secondary)";
+                        badge.style.borderColor = "var(--border-glass)";
+                    } else if (data.plan_tier === "SILVER") {
+                        badge.style.background = "rgba(255, 255, 255, 0.1)";
+                        badge.style.color = "#d1d5db";
+                        badge.style.borderColor = "rgba(255, 255, 255, 0.25)";
+                    } else if (data.plan_tier === "GOLD") {
+                        badge.style.background = "rgba(255, 159, 10, 0.15)";
+                        badge.style.color = "var(--accent-orange)";
+                        badge.style.borderColor = "rgba(255, 159, 10, 0.3)";
+                    } else if (data.plan_tier === "PLATINUM") {
+                        badge.style.background = "rgba(0, 242, 254, 0.15)";
+                        badge.style.color = "var(--accent-blue)";
+                        badge.style.borderColor = "rgba(0, 242, 254, 0.3)";
+                    }
+                }
+                
+                // Select in dropdown
+                const select = document.getElementById("settings-upgrade-plan");
+                if (select) {
+                    select.value = data.plan_tier;
+                }
+
+                // Populate Telegram Chat ID
+                const tgInput = document.getElementById("settings-telegram-chat-id");
+                if (tgInput) {
+                    tgInput.value = data.telegram_chat_id || "";
+                }
+
+                // Check if user is master admin spvquantam
+                if (data.email === "spvquantam") {
+                    const adminBtn = document.getElementById("btn-tab-admin");
+                    const adminDiv = document.getElementById("admin-divider");
+                    if (adminBtn) adminBtn.style.display = "block";
+                    if (adminDiv) adminDiv.style.display = "block";
+                }
+            }
+        } catch (e) {
+            console.error("Failed to fetch user profile", e);
+        }
+    }
+
+    window.saveTelegramChatId = async function() {
+        const tgInput = document.getElementById("settings-telegram-chat-id");
+        if (!tgInput) return;
+        const telegram_chat_id = tgInput.value.trim();
+        
+        try {
+            const res = await fetch(`${apiBase}/api/auth/telegram-chat-id`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ telegram_chat_id })
+            });
+            if (res.ok) {
+                const statusMsg = document.getElementById("settings-status-msg");
+                if (statusMsg) {
+                    statusMsg.textContent = "⚡ Telegram Chat ID updated successfully!";
+                    statusMsg.style.color = "var(--accent-green)";
+                    setTimeout(() => {
+                        statusMsg.textContent = "";
+                    }, 3000);
+                } else {
+                    alert("Telegram Chat ID updated successfully!");
+                }
+            } else {
+                alert("Failed to update Telegram Chat ID.");
+            }
+        } catch (e) {
+            console.error(e);
+            alert("Error communicating with server.");
+        }
+    };
+
+    window.closePaymentModal = function() {
+        document.getElementById("payment-modal").style.display = "none";
+    };
+
+    window.handleUpgradePlan = async function() {
+        const plan_tier = document.getElementById("settings-upgrade-plan").value;
+        const isAdmin = document.getElementById("btn-tab-admin") && document.getElementById("btn-tab-admin").style.display === "block";
+        
+        if (!isAdmin) {
+            // Calculate pricing
+            let price = 0;
+            let planName = "Free Trial";
+            if (plan_tier === "SILVER") {
+                price = 999;
+                planName = "Pro Silver Plan";
+            } else if (plan_tier === "GOLD") {
+                price = 2499;
+                planName = "Pro Gold Plan";
+            } else if (plan_tier === "PLATINUM") {
+                price = 4999;
+                planName = "Enterprise Platinum Plan";
+            }
+            
+            if (price === 0) {
+                alert("You are already on the Free Trial.");
+                return;
+            }
+            
+            // Generate UPI QR link
+            const upiLink = `upi://pay?pa=parmarsanjayb74@okaxis&pn=SPV%20Quantum&am=${price}&tn=Upgrade%20to%20${plan_tier}`;
+            const encodedUpi = encodeURIComponent(upiLink);
+            const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodedUpi}`;
+            
+            // Set text & img in modal
+            document.getElementById("payment-plan-title").textContent = planName;
+            document.getElementById("payment-plan-price").textContent = `₹${price.toLocaleString('en-IN')} / Month`;
+            document.getElementById("payment-qr-img").src = qrUrl;
+            
+            // Show modal
+            document.getElementById("payment-modal").style.display = "flex";
+            return;
+        }
+        
+        // Admin gets instant upgrade without paying
+        try {
+            const res = await fetch(`${apiBase}/api/auth/upgrade`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ plan_tier })
+            });
+            const data = await res.json();
+            if (res.ok && data.success) {
+                const statusMsg = document.getElementById("settings-status-msg");
+                if (statusMsg) {
+                    statusMsg.textContent = "⚡ Subscription Plan updated! Reloading...";
+                    statusMsg.style.color = "var(--accent-green)";
+                }
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1500);
+            } else {
+                alert("Failed to update plan: " + (data.detail || "Unknown error"));
+            }
+        } catch (e) {
+            console.error("Failed to upgrade plan", e);
+            alert("Failed to communicate with server.");
+        }
+    };
+
+    async function fetchAdminUsers() {
+        try {
+            const res = await fetch(`${apiBase}/api/admin/users`);
+            if (res.ok) {
+                const data = await res.json();
+                const tbody = document.getElementById("admin-users-tbody");
+                if (tbody) {
+                    tbody.innerHTML = "";
+                    data.users.forEach(u => {
+                        const tr = document.createElement("tr");
+                        tr.innerHTML = `
+                            <td style="padding: 0.8rem; border-bottom: 1px solid var(--border-glass); color: var(--text-primary); font-weight: 500;">${u.email}</td>
+                            <td style="padding: 0.8rem; border-bottom: 1px solid var(--border-glass); color: var(--text-secondary);">${u.phone || 'N/A'}</td>
+                            <td style="padding: 0.8rem; border-bottom: 1px solid var(--border-glass);">
+                                <span class="badge" style="background: rgba(0, 242, 254, 0.15); color: var(--accent-blue); padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.8rem;">${u.plan_tier}</span>
+                            </td>
+                            <td style="padding: 0.8rem; border-bottom: 1px solid var(--border-glass);">
+                                <div style="display: flex; gap: 0.4rem; align-items: center;">
+                                    <select id="admin-plan-${u.user_id}" style="padding: 0.3rem; border-radius: 4px; background: rgba(0,0,0,0.4); color: var(--text-primary); border: 1px solid var(--border-glass); font-size: 0.8rem;">
+                                        <option value="FREE" ${u.plan_tier === 'FREE' ? 'selected' : ''}>Free Trial</option>
+                                        <option value="SILVER" ${u.plan_tier === 'SILVER' ? 'selected' : ''}>Pro Silver</option>
+                                        <option value="GOLD" ${u.plan_tier === 'GOLD' ? 'selected' : ''}>Pro Gold</option>
+                                        <option value="PLATINUM" ${u.plan_tier === 'PLATINUM' ? 'selected' : ''}>Enterprise Platinum</option>
+                                    </select>
+                                    <button class="btn-action" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; background: var(--accent-green); color: black; font-weight:600; border-radius: 4px;" onclick="adminChangeUserPlan('${u.user_id}')">Update</button>
+                                </div>
+                            </td>
+                            <td style="padding: 0.8rem; border-bottom: 1px solid var(--border-glass);">
+                                <div style="display: flex; gap: 0.4rem; align-items: center;">
+                                    <input type="text" id="admin-pass-${u.user_id}" placeholder="New Password" style="padding: 0.3rem; border-radius: 4px; background: rgba(0,0,0,0.4); color: var(--text-primary); border: 1px solid var(--border-glass); font-size: 0.8rem; width: 110px;">
+                                    <button class="btn-action" style="padding: 0.3rem 0.6rem; font-size: 0.75rem; background: var(--accent-orange); color: black; font-weight:600; border-radius: 4px;" onclick="adminResetUserPassword('${u.user_id}')">Reset</button>
+                                </div>
+                            </td>
+                        `;
+                        tbody.appendChild(tr);
+                    });
+                }
+            }
+        } catch (e) {
+            console.error("Failed to load admin users", e);
+        }
+    }
+
+    window.adminChangeUserPlan = async function(userId) {
+        const planTier = document.getElementById(`admin-plan-${userId}`).value;
+        try {
+            const res = await fetch(`${apiBase}/api/admin/change-plan`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user_id: userId, plan_tier: planTier })
+            });
+            if (res.ok) {
+                alert("User plan updated successfully!");
+                fetchAdminUsers();
+            } else {
+                const data = await res.json();
+                alert("Failed to update plan: " + (data.detail || "Error"));
+            }
+        } catch(e) {
+            console.error(e);
+        }
+    };
+
+    window.adminResetUserPassword = async function(userId) {
+        const newPassword = document.getElementById(`admin-pass-${userId}`).value;
+        if (!newPassword) {
+            alert("Please enter a new password first.");
+            return;
+        }
+        try {
+            const res = await fetch(`${apiBase}/api/admin/reset-password`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ user_id: userId, new_password: newPassword })
+            });
+            if (res.ok) {
+                alert("User password reset successfully!");
+                document.getElementById(`admin-pass-${userId}`).value = "";
+                fetchAdminUsers();
+            } else {
+                const data = await res.json();
+                alert("Failed to reset password: " + (data.detail || "Error"));
+            }
+        } catch(e) {
+            console.error(e);
+        }
+    };
+
+    window.handleLogout = function() {
+        localStorage.removeItem("access_token");
+        window.location.reload();
     };
 });

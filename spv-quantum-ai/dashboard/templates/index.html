@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SPV Quantum AI - Enterprise Trading Terminal v2</title>
+    <title>SPV Quantum - Enterprise Trading Terminal v2</title>
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
     <!-- Include Stylesheet -->
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/css/style.css?v=2.9.0">
     <!-- Lucide Icons for clean visuals -->
     <script src="https://unpkg.com/lucide@latest"></script>
     <!-- Chart.js for premium visualization charts -->
@@ -13,49 +14,61 @@
 </head>
 <body>
 
-    <!-- TOP BAR -->
-    <header class="top-bar">
-        <div class="logo-area">
-            <span class="status-indicator" id="status-indicator"></span>
-            <h1>SPV QUANTUM AI <span class="term-ver">v2.0 // RC-2</span></h1>
-        </div>
-        
-        <nav class="nav-tabs">
-            <button class="tab-btn active" id="btn-tab-terminal" onclick="switchTab('tab-terminal')">Trading Terminal</button>
-            <button class="tab-btn" id="btn-tab-monitoring" onclick="switchTab('tab-monitoring')">AI Employee Monitor</button>
-            <button class="tab-btn" id="btn-tab-decisions" onclick="switchTab('tab-decisions')">Decision Log</button>
-            <button class="tab-btn" id="btn-tab-performance" onclick="switchTab('tab-performance')">Performance &amp; Charts</button>
-            <button class="tab-btn" id="btn-tab-settings" onclick="switchTab('tab-settings')">System Settings</button>
-            <button class="tab-btn" id="btn-tab-paper" onclick="switchTab('tab-paper')">Paper Trading</button>
-        </nav>
-        
-        <div class="top-bar-metrics">
-            <div class="top-metric">
-                <span class="label">Time</span>
-                <span class="value" id="top-time">-</span>
+    <div class="app-shell">
+        <!-- LEFT SIDEBAR NAV -->
+        <aside class="side-nav">
+            <div class="logo-area">
+                <img src="/static/img/logo-full.png" alt="SPV Quantum" class="logo-full-img">
             </div>
-            <div class="top-metric">
-                <span class="label">Broker</span>
-                <span class="value" id="top-broker">-</span>
+
+            <nav class="nav-tabs">
+                <button class="tab-btn active" id="btn-tab-terminal" onclick="switchTab('tab-terminal')">Trade</button>
+                <button class="tab-btn" id="btn-tab-strategy" onclick="switchTab('tab-strategy')">Strategy Setup</button>
+                <button class="tab-btn" id="btn-tab-studio" onclick="switchTab('tab-studio')">Strategy Studio</button>
+                <button class="tab-btn" id="btn-tab-backtest" onclick="switchTab('tab-backtest')">Backtest</button>
+                <button class="tab-btn" id="btn-tab-monitoring" onclick="switchTab('tab-monitoring')">AI Employee Monitor</button>
+                <button class="tab-btn" id="btn-tab-decisions" onclick="switchTab('tab-decisions')">Decision Log</button>
+                <button class="tab-btn" id="btn-tab-performance" onclick="switchTab('tab-performance')">Performance &amp; Charts</button>
+                <div class="nav-tabs-divider"></div>
+                <button class="tab-btn" id="btn-tab-ipo" onclick="switchTab('tab-ipo')">IPO Research</button>
+                <div class="nav-tabs-divider"></div>
+                <button class="tab-btn" id="btn-tab-settings" onclick="switchTab('tab-settings')">System Settings</button>
+                <div class="nav-tabs-divider" id="admin-divider" style="display: none;"></div>
+                <button class="tab-btn" id="btn-tab-admin" onclick="switchTab('tab-admin')" style="display: none; background: rgba(255, 159, 10, 0.1); border-left: 3px solid var(--accent-orange);">Admin Panel</button>
+            </nav>
+
+            <div class="side-nav-status">
+                <span class="status-indicator" id="status-indicator"></span>
+                <span id="connection-status">DISCONNECTED</span>
             </div>
-            <div class="top-metric">
-                <span class="label">WebSockets</span>
-                <span class="value" id="connection-status">DISCONNECTED</span>
-            </div>
-            <div class="top-metric">
-                <span class="label">Mode</span>
-                <span class="value" id="top-mode">-</span>
-            </div>
-            <div class="top-metric">
-                <span class="label">AI Employee</span>
-                <span class="value accent-blue" id="top-employee">-</span>
-            </div>
-            <div class="top-metric">
-                <span class="label">Health</span>
-                <span class="value" id="top-health">-</span>
-            </div>
-        </div>
-    </header>
+        </aside>
+
+        <div class="main-content">
+            <!-- TOP BAR (metrics only now) -->
+            <header class="top-bar">
+                <div class="top-bar-metrics">
+                    <div class="top-metric">
+                        <span class="label">Time</span>
+                        <span class="value" id="top-time">-</span>
+                    </div>
+                    <div class="top-metric">
+                        <span class="label">Broker</span>
+                        <span class="value" id="top-broker">-</span>
+                    </div>
+                    <div class="top-metric">
+                        <span class="label">Mode</span>
+                        <span class="value" id="top-mode">-</span>
+                    </div>
+                    <div class="top-metric">
+                        <span class="label">AI Employee</span>
+                        <span class="value accent-blue" id="top-employee">-</span>
+                    </div>
+                    <div class="top-metric">
+                        <span class="label">Health</span>
+                        <span class="value" id="top-health">-</span>
+                    </div>
+                </div>
+            </header>
 
     <div class="dashboard-wrapper">
         <!-- SUMMARY CARDS ROW -->
@@ -104,28 +117,101 @@
 
         <!-- TAB 1: TERMINAL -->
         <div id="tab-terminal" class="tab-panel active">
+
+            <!-- MY ACTIVE SYMBOL -->
+            <div class="card" id="my-symbol-card">
+                <div class="card-header-actions">
+                    <h2>My Symbol</h2>
+                    <span id="my-symbol-mode-badge" class="badge">-</span>
+                </div>
+                <div id="my-symbol-empty" style="padding: 1rem 0.25rem; color: var(--text-secondary); font-size: 0.9rem;">
+                    No symbol selected yet — pick one in the <a href="#" onclick="switchTab('tab-strategy'); return false;">Strategy Setup</a> tab.
+                </div>
+                <div id="my-symbol-content" style="display: none;">
+                    <div class="details-grid" style="font-size: 1.05rem;">
+                        <div><strong id="my-symbol-name">-</strong></div>
+                        <div>LTP: <span id="my-symbol-ltp" class="value">-</span></div>
+                        <div>Change: <span id="my-symbol-change" class="value">-</span></div>
+                        <div>Position: <span id="my-symbol-position">No open position</span></div>
+                    </div>
+                    <div class="manual-trade-actions" id="manual-trade-actions" style="display: none; gap: 0.6rem; margin-top: 0.8rem;">
+                        <button class="btn-success" id="btn-manual-buy">BUY</button>
+                        <button class="btn-danger" id="btn-manual-sell">SELL</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PENDING CONFIRMATIONS (Manual mode only) -->
+            <div class="card" id="pending-confirmations-card" style="display: none;">
+                <h2>Pending Confirmation</h2>
+                <div id="pending-confirmations-list"></div>
+            </div>
+
             <!-- MAIN LAYOUT GRID -->
             <div class="terminal-layout-grid">
-            
+
             <!-- COLUMN 1: Live Market & AI Employee Identity -->
             <div class="grid-col flex-col">
                 <!-- LIVE MARKET PANEL -->
                 <div class="card flex-grow-1">
-                    <h2>Live Market Monitor</h2>
+                    <div class="card-header-actions">
+                        <h2>Live Market Monitor</h2>
+                        <div style="display: flex; gap: 0.5rem; align-items: center;">
+                            <span id="feed-status-badge" class="feed-status-badge feed-disconnected">Feed Disconnected</span>
+                            <button class="btn-action" id="btn-toggle-market-panel" style="font-size: 0.75rem; padding: 0.3rem 0.6rem;">Show Full Market</button>
+                        </div>
+                    </div>
                     <div class="market-controls">
                         <input type="text" id="market-search" placeholder="Search symbol...">
                     </div>
-                    <div class="prices-container" id="prices-row">
-                        <!-- Dynamic price cards -->
-                    </div>
-                    <div class="gainers-losers-panel">
-                        <div class="gl-box">
-                            <span class="box-title text-green">Top Gainers</span>
-                            <div id="top-gainers" class="gl-list">-</div>
+                    <div class="market-groups" id="market-groups" style="display: none;">
+                        <div class="feed-disconnected-overlay" id="feed-disconnected-overlay">
+                            Waiting for live market feed...
                         </div>
-                        <div class="gl-box">
-                            <span class="box-title text-red">Top Losers</span>
-                            <div id="top-losers" class="gl-list">-</div>
+                        <div class="market-closed-overlay" id="market-closed-overlay">
+                            Market Closed — showing last traded values
+                        </div>
+
+                        <!-- MARKET INDICES -->
+                        <div class="market-group">
+                            <div class="market-group-title">Market Indices</div>
+                            <div class="indices-row" id="indices-row">
+                                <!-- Dynamic index cards -->
+                            </div>
+                        </div>
+
+                        <!-- TOP GAINERS / LOSERS -->
+                        <div class="gainers-losers-grid">
+                            <div class="market-group">
+                                <div class="market-group-title accent-green-text">Top Gainers</div>
+                                <table class="mini-table">
+                                    <thead>
+                                        <tr><th>Symbol</th><th>LTP</th><th>Chg %</th></tr>
+                                    </thead>
+                                    <tbody id="top-gainers-body">
+                                        <tr><td colspan="3" class="mini-table-empty">-</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                            <div class="market-group">
+                                <div class="market-group-title accent-red-text">Top Losers</div>
+                                <table class="mini-table">
+                                    <thead>
+                                        <tr><th>Symbol</th><th>LTP</th><th>Chg %</th></tr>
+                                    </thead>
+                                    <tbody id="top-losers-body">
+                                        <tr><td colspan="3" class="mini-table-empty">-</td></tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <!-- COMMODITY WATCH -->
+                        <div class="market-group">
+                            <div class="market-group-title">Commodity Watch</div>
+                            <div class="prices-container" id="prices-row-commodity">
+                                <!-- Dynamic commodity cards -->
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -163,6 +249,86 @@
 
             <!-- COLUMN 2: Trading Engine & Active Positions -->
             <div class="grid-col flex-col">
+                <!-- P&L REPORT: day / week / month / all-time, split by segment -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h2>P&amp;L Report</h2>
+                        <div class="pnl-period-tabs" id="pnl-period-tabs">
+                            <button class="btn-action active" data-period="today">Today</button>
+                            <button class="btn-action" data-period="week">Week</button>
+                            <button class="btn-action" data-period="month">Month</button>
+                            <button class="btn-action" data-period="total">Total</button>
+                        </div>
+                    </div>
+                    <div class="pnl-headline" id="pnl-headline">
+                        <div class="pnl-headline-item">
+                            <span class="label">Net P&amp;L</span>
+                            <span class="value" id="pnl-net">₹0.00</span>
+                        </div>
+                        <div class="pnl-headline-item">
+                            <span class="label">Profit</span>
+                            <span class="value text-green" id="pnl-profit">₹0.00</span>
+                        </div>
+                        <div class="pnl-headline-item">
+                            <span class="label">Loss</span>
+                            <span class="value text-red" id="pnl-loss">₹0.00</span>
+                        </div>
+                        <div class="pnl-headline-item">
+                            <span class="label">Trades</span>
+                            <span class="value" id="pnl-trades">0</span>
+                        </div>
+                        <div class="pnl-headline-item">
+                            <span class="label">Win Rate</span>
+                            <span class="value" id="pnl-winrate">–</span>
+                        </div>
+                    </div>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Segment</th>
+                                    <th>Trades</th>
+                                    <th>Win / Loss</th>
+                                    <th>Profit</th>
+                                    <th>Loss</th>
+                                    <th>Net P&amp;L</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pnl-segments-body">
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted">No completed trades yet.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Drill-down: every trade behind the numbers above -->
+                    <div class="pnl-detail" id="pnl-detail" hidden>
+                        <div class="pnl-detail-header">
+                            <span id="pnl-detail-title">All trades</span>
+                            <button class="btn-action" id="pnl-detail-close">Close</button>
+                        </div>
+                        <div class="table-wrapper">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Symbol</th>
+                                        <th>Segment</th>
+                                        <th>Side</th>
+                                        <th>Qty</th>
+                                        <th>Entry Time</th>
+                                        <th>Entry Price</th>
+                                        <th>Exit Time</th>
+                                        <th>Exit Price</th>
+                                        <th>P&amp;L</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="pnl-detail-body"></tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- ACTIVE POSITIONS -->
                 <div class="card">
                     <h2>Active Portfolio Positions</h2>
@@ -331,11 +497,217 @@
         </div>
         </div>
 
+        <!-- TAB: STRATEGY SETUP -->
+        <div id="tab-strategy" class="tab-panel">
+            <div class="card" style="margin-top: 1rem; max-width: 700px; margin-left: auto; margin-right: auto;">
+                <div class="card-header-actions">
+                    <h2>Strategy Setup</h2>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label for="strategy-symbol-select" style="font-weight: 600; font-size: 0.9rem; color: var(--accent-blue);">Symbol to Trade</label>
+                    <select id="strategy-symbol-select" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.4); color: var(--text-primary); font-size: 0.9rem; margin-top: 0.4rem;">
+                        <option value="">-- Select Symbol --</option>
+                    </select>
+                </div>
+
+                <div class="form-group" style="margin-top: 1rem;">
+                    <p style="font-size: 0.85rem; color: var(--text-secondary);">
+                        Trade Mode &amp; Broker Environment can be configured in the 
+                        <a href="#" onclick="showTab('settings')" style="color: var(--accent-blue); text-decoration: underline; font-weight: 600;">System Settings</a> tab.
+                    </p>
+                </div>
+
+                <div id="strategy-setup-status" style="font-size: 0.85rem; font-weight: 500; margin-top: 0.5rem;"></div>
+            </div>
+
+            <div class="card" style="margin-top: 1.2rem; max-width: 700px; margin-left: auto; margin-right: auto;">
+                <div class="card-header-actions">
+                    <h2>Active Strategy</h2>
+                </div>
+                <div id="active-strategy-details" class="details-grid">
+                    <div>Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: STRATEGY STUDIO -->
+        <div id="tab-studio" class="tab-panel">
+            <div class="studio-layout" style="display: grid; grid-template-columns: 320px 1fr; gap: 1rem; margin-top: 1rem; align-items: start;">
+
+                <!-- LEFT: Strategy list -->
+                <div class="card">
+                    <div class="card-header-actions">
+                        <h2>Strategies</h2>
+                        <button class="btn-action btn-xs" id="btn-studio-new">+ New</button>
+                    </div>
+                    <div id="studio-strategy-list"></div>
+                </div>
+
+                <!-- RIGHT: Editor -->
+                <div class="card" id="studio-editor-card" style="display: none;">
+                    <div class="card-header-actions">
+                        <h2 id="studio-editor-title">New Strategy</h2>
+                        <div style="display: flex; gap: 0.5rem;">
+                            <button class="btn-action btn-xs" id="btn-studio-validate">Validate</button>
+                            <button class="btn-success btn-xs" id="btn-studio-save">Save</button>
+                        </div>
+                    </div>
+
+                    <div id="studio-validation-errors" style="display: none; background: rgba(255,59,48,0.1); border: 1px solid var(--accent-red); border-radius: 6px; padding: 0.8rem; margin-bottom: 1rem; font-size: 0.85rem;"></div>
+
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label>Strategy Name</label>
+                            <input type="text" id="studio-name" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                        </div>
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" id="studio-description" style="width: 100%; padding: 0.5rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                        </div>
+                    </div>
+                    <div class="form-group" style="margin-bottom: 1rem;">
+                        <label><input type="checkbox" id="studio-enabled" checked> Enabled</label>
+                    </div>
+
+                    <!-- ENTRY RULES -->
+                    <div class="studio-rule-section" style="border-top: 1px solid var(--border-glass); padding-top: 1rem; margin-bottom: 1rem;">
+                        <div class="card-header-actions">
+                            <h3 style="color: var(--accent-green);">Entry Rules (when to BUY)</h3>
+                            <select id="studio-entry-operator" style="padding: 0.3rem; border-radius: 6px; background: rgba(0,0,0,0.3); color: var(--text-primary); border: 1px solid var(--border-glass);">
+                                <option value="AND">Match ALL (AND)</option>
+                                <option value="OR">Match ANY (OR)</option>
+                            </select>
+                        </div>
+                        <div id="studio-entry-conditions"></div>
+                        <button class="btn-action btn-xs" id="btn-studio-add-entry-condition" style="margin-top: 0.5rem;">+ Add Condition</button>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
+                            <div class="form-group">
+                                <label style="font-size: 0.8rem;">Entry Confidence %</label>
+                                <input type="number" id="studio-entry-confidence" value="85" min="0" max="100" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size: 0.8rem;">Entry Reason</label>
+                                <input type="text" id="studio-entry-reason" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- EXIT RULES -->
+                    <div class="studio-rule-section" style="border-top: 1px solid var(--border-glass); padding-top: 1rem; margin-bottom: 1rem;">
+                        <div class="card-header-actions">
+                            <h3 style="color: var(--accent-red);">Exit Rules (when to SELL)</h3>
+                            <select id="studio-exit-operator" style="padding: 0.3rem; border-radius: 6px; background: rgba(0,0,0,0.3); color: var(--text-primary); border: 1px solid var(--border-glass);">
+                                <option value="AND">Match ALL (AND)</option>
+                                <option value="OR">Match ANY (OR)</option>
+                            </select>
+                        </div>
+                        <div id="studio-exit-conditions"></div>
+                        <button class="btn-action btn-xs" id="btn-studio-add-exit-condition" style="margin-top: 0.5rem;">+ Add Condition</button>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem;">
+                            <div class="form-group">
+                                <label style="font-size: 0.8rem;">Exit Confidence %</label>
+                                <input type="number" id="studio-exit-confidence" value="80" min="0" max="100" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                            </div>
+                            <div class="form-group">
+                                <label style="font-size: 0.8rem;">Exit Reason</label>
+                                <input type="text" id="studio-exit-reason" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- VERSION HISTORY -->
+                    <div class="studio-rule-section" style="border-top: 1px solid var(--border-glass); padding-top: 1rem;">
+                        <h3>Version History</h3>
+                        <div id="studio-version-history"></div>
+                    </div>
+                </div>
+
+                <div class="card" id="studio-empty-state">
+                    <p style="color: var(--text-secondary); padding: 1rem 0;">Select a strategy on the left to edit it, or click "+ New" to build one from scratch.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB: BACKTEST -->
+        <div id="tab-backtest" class="tab-panel">
+            <div class="card" style="margin-top: 1rem; max-width: 700px; margin-left: auto; margin-right: auto;">
+                <div class="card-header-actions">
+                    <h2>Backtest Strategy</h2>
+                </div>
+                <form id="backtest-form" style="display: flex; flex-direction: column; gap: 1rem;">
+                    <div class="form-group">
+                        <label for="backtest-strategy">Strategy</label>
+                        <select id="backtest-strategy" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.4); color: var(--text-primary);">
+                            <option value="">-- Select Strategy --</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="backtest-symbol">Symbol</label>
+                        <select id="backtest-symbol" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.4); color: var(--text-primary);">
+                            <option value="">-- Select Symbol --</option>
+                        </select>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                        <div class="form-group">
+                            <label for="backtest-start-date">From</label>
+                            <input type="date" id="backtest-start-date" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                        </div>
+                        <div class="form-group">
+                            <label for="backtest-end-date">To</label>
+                            <input type="date" id="backtest-end-date" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary);">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn-action" style="background: var(--gradient-blue); color: #000; font-weight: 600;">Run Backtest</button>
+                </form>
+                <div id="backtest-progress" style="margin-top: 1rem; display: none;">
+                    <div class="prog-bar"><div class="prog-bar-fill" id="backtest-progress-fill" style="width: 0%"></div></div>
+                    <p id="backtest-progress-text" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.4rem;"></p>
+                </div>
+            </div>
+
+            <div class="card" id="backtest-result-card" style="margin-top: 1.2rem; max-width: 900px; margin-left: auto; margin-right: auto; display: none;">
+                <div class="card-header-actions">
+                    <h2>Result</h2>
+                </div>
+                <div id="backtest-verdict-badge" class="badge" style="font-size: 1.1rem; padding: 0.5rem 1rem; display: inline-block; margin-bottom: 1rem;">-</div>
+                <p id="backtest-verdict-detail" style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;"></p>
+
+                <div class="summary-cards-container" id="backtest-metrics-grid" style="margin-bottom: 1rem;"></div>
+
+                <div style="margin-bottom: 1.2rem;">
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.5rem;">Equity Curve</h3>
+                    <canvas id="backtest-equity-chart" height="80"></canvas>
+                </div>
+
+                <div>
+                    <h3 style="font-size: 0.95rem; margin-bottom: 0.5rem;">Trade Log</h3>
+                    <div class="table-wrapper">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Time</th><th>Symbol</th><th>Side</th><th>Entry</th><th>Exit</th><th>Qty</th><th>P&amp;L</th>
+                                </tr>
+                            </thead>
+                            <tbody id="backtest-trade-log-body">
+                                <tr><td colspan="7" class="text-center text-muted">No trades yet.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 2: AI EMPLOYEE MONITOR -->
         <div id="tab-monitoring" class="tab-panel">
             <div class="card-header-actions" style="margin-top: 1rem; margin-bottom: 1rem;">
                 <h2>AI Employee Monitoring Terminal</h2>
-                <span class="badge text-green">Auto-Monitoring Heartbeats: Active</span>
+                <div style="display: flex; gap: 0.8rem; align-items: center;">
+                    <label style="font-size: 0.85rem; color: var(--text-secondary); display: flex; align-items: center; gap: 0.4rem;">
+                        <input type="checkbox" id="chk-relevant-only" checked> Show relevant employees only
+                    </label>
+                    <span class="badge text-green">Auto-Monitoring Heartbeats: Active</span>
+                </div>
             </div>
             
             <div class="monitoring-grid" id="monitor-cards-container">
@@ -425,6 +797,58 @@
             </div>
         </div>
 
+        <!-- TAB: IPO RESEARCH (independent module) -->
+        <div id="tab-ipo" class="tab-panel">
+            <div class="card-header-actions" style="margin-top: 1rem; margin-bottom: 1rem;">
+                <h2>IPO Research</h2>
+                <div style="display: flex; gap: 0.6rem; align-items: center;">
+                    <span id="ipo-accuracy-badge" class="badge" style="font-size: 0.75rem;">Accuracy: -</span>
+                    <button class="btn-action btn-xs" id="btn-ipo-refresh">Refresh Live Data</button>
+                </div>
+            </div>
+
+            <div class="log-filters" id="ipo-status-filters">
+                <button class="active" data-ipo-status="open">Open</button>
+                <button data-ipo-status="upcoming">Upcoming</button>
+                <button data-ipo-status="closed">Closed</button>
+                <button data-ipo-status="listed">Listed</button>
+            </div>
+
+            <div class="market-controls" style="margin: 0.8rem 0;">
+                <input type="text" id="ipo-search" placeholder="Search company name...">
+            </div>
+
+            <div class="terminal-layout-grid" style="grid-template-columns: 1fr 1.3fr;">
+                <!-- LIST -->
+                <div class="card">
+                    <div id="ipo-list" style="display: flex; flex-direction: column; gap: 0.6rem;"></div>
+                </div>
+
+                <!-- DETAIL -->
+                <div class="card" id="ipo-detail-card">
+                    <div id="ipo-detail-empty" style="color: var(--text-secondary); padding: 1rem 0;">
+                        Select an IPO on the left to see subscription data, AI analyst reports, and the CEO recommendation.
+                    </div>
+                    <div id="ipo-detail-content" style="display: none;">
+                        <div class="card-header-actions">
+                            <h3 id="ipo-detail-name">-</h3>
+                            <button class="btn-action btn-xs" id="btn-ipo-run-analysis">Run Analysis</button>
+                        </div>
+                        <div class="details-grid" id="ipo-detail-fields" style="margin-bottom: 1rem;"></div>
+
+                        <div id="ipo-recommendation-card" style="display: none; margin-bottom: 1rem; padding: 0.8rem; border-radius: 8px; border: 1px solid var(--border-glass);">
+                            <span id="ipo-rec-badge" class="badge" style="font-size: 1rem; padding: 0.4rem 0.9rem;">-</span>
+                            <p id="ipo-rec-reasoning" style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.6rem;"></p>
+                            <p id="ipo-rec-completeness" style="font-size: 0.78rem; color: var(--text-secondary);"></p>
+                        </div>
+
+                        <h4 style="font-size: 0.9rem; margin-bottom: 0.5rem;">Analyst Reports</h4>
+                        <div id="ipo-analyst-reports"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- TAB 5: SYSTEM SETTINGS -->
         <div id="tab-settings" class="tab-panel">
             <div class="card" style="margin-top: 1rem; max-width: 600px; margin-left: auto; margin-right: auto;">
@@ -434,27 +858,57 @@
                 
                 <form id="settings-form" onsubmit="saveSystemSettings(event)" style="display: flex; flex-direction: column; gap: 1.2rem; padding: 0.5rem;">
                     
-                    <!-- Broker Select -->
-                    <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
-                        <label for="settings-active-broker" style="font-weight: 600; font-size: 0.9rem; color: var(--accent-blue);">Active Trading Environment</label>
-                        <select id="settings-active-broker" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.4); color: var(--text-primary); font-size: 0.9rem;" onchange="toggleCredentialsVisibility()">
-                            <option value="paper_broker">Paper Trading (Simulation Mode)</option>
-                            <option value="kotak_neo">Kotak Neo (Live API Integration)</option>
-                        </select>
-                    </div>
-                    
-                    <!-- Kotak Credentials Group -->
-                    <div id="kotak-creds-group" style="display: flex; flex-direction: column; gap: 1.2rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem;">
-                        <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--accent-orange);">Kotak Neo API Credentials</h3>
+                    <!-- Section 1: Trading Controls -->
+                    <div style="display: flex; flex-direction: column; gap: 1.2rem; margin-bottom: 0.5rem;">
+                        <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--accent-blue); border-bottom: 1px solid var(--border-glass); padding-bottom: 0.4rem; margin: 0;">Trading Controls</h3>
                         
                         <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
-                            <label for="settings-client-id" style="font-size: 0.85rem; color: var(--text-secondary);">Client ID (Mobile Number / UCC)</label>
-                            <input type="text" id="settings-client-id" placeholder="e.g. 9876543210" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                            <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-secondary);">Trade Mode</label>
+                            <div style="display: flex; gap: 0.6rem;">
+                                <button type="button" class="btn-action mode-toggle-btn" id="btn-mode-auto" data-mode="AUTO" style="flex: 1; padding: 0.6rem;">Auto (AI trades automatically)</button>
+                                <button type="button" class="btn-action mode-toggle-btn" id="btn-mode-manual" data-mode="MANUAL" style="flex: 1; padding: 0.6rem;">Manual (I confirm every trade)</button>
+                            </div>
                         </div>
                         
                         <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
-                            <label for="settings-api-key" style="font-size: 0.85rem; color: var(--text-secondary);">API Key (Consumer Key)</label>
+                            <label style="font-weight: 600; font-size: 0.85rem; color: var(--text-secondary);">Money Mode</label>
+                            <div style="display: flex; gap: 0.6rem;">
+                                <button type="button" class="btn-action broker-toggle-btn" id="btn-broker-paper" data-broker="paper_broker" style="flex: 1; padding: 0.6rem;">Paper Trade (Simulation)</button>
+                                <button type="button" class="btn-action broker-toggle-btn" id="btn-broker-real" data-broker="kotak_neo" style="flex: 1; padding: 0.6rem;">Real Money (Kotak Neo)</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Hidden active broker input to satisfy JS saveSystemSettings payload -->
+                    <input type="hidden" id="settings-active-broker" value="paper_broker">
+                    
+                    <!-- Section 2: Kotak Credentials Group -->
+                    <div id="kotak-creds-group" style="display: flex; flex-direction: column; gap: 1.2rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem;">
+                        <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--accent-orange); border-bottom: 1px solid var(--border-glass); padding-bottom: 0.4rem; margin: 0;">Kotak Neo API Credentials</h3>
+                        
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-client-id" style="font-size: 0.85rem; color: var(--text-secondary);">UCC / Client ID</label>
+                            <input type="text" id="settings-client-id" placeholder="e.g. S0GR8" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                        </div>
+
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-mobile-number" style="font-size: 0.85rem; color: var(--text-secondary);">Mobile Number</label>
+                            <input type="text" id="settings-mobile-number" placeholder="e.g. 9898586575" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                        </div>
+                        
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-api-key" style="font-size: 0.85rem; color: var(--text-secondary);">Consumer Key (API Key)</label>
                             <input type="password" id="settings-api-key" placeholder="Enter Developer Consumer Key" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                        </div>
+
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-mpin" style="font-size: 0.85rem; color: var(--text-secondary);">MPIN</label>
+                            <input type="password" id="settings-mpin" placeholder="Enter 6-digit MPIN" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
+                        </div>
+
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-totp-secret" style="font-size: 0.85rem; color: var(--text-secondary);">TOTP Secret</label>
+                            <input type="password" id="settings-totp-secret" placeholder="Enter Google Authenticator TOTP Secret" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem;">
                         </div>
                     </div>
                     
@@ -475,6 +929,22 @@
                         </div>
                     </div>
                     
+                    <!-- Telegram Notifications Group -->
+                    <div style="display: flex; flex-direction: column; gap: 1.2rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem; margin-bottom: 0.5rem;">
+                        <h3 style="font-size: 0.95rem; font-weight: 600; color: var(--accent-orange);">Telegram Notifications</h3>
+                        
+                        <div class="form-group" style="display: flex; flex-direction: column; gap: 0.4rem;">
+                            <label for="settings-telegram-chat-id" style="font-size: 0.85rem; color: var(--text-secondary);">Your Telegram Chat ID</label>
+                            <div style="display: flex; gap: 1rem; align-items: center;">
+                                <input type="text" id="settings-telegram-chat-id" placeholder="e.g. 123456789" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.9rem; flex-grow: 1;">
+                                <button type="button" class="btn-action" style="background: var(--gradient-blue); color: #000; font-weight: 600; padding: 0.6rem 1rem;" onclick="saveTelegramChatId()">Save Chat ID</button>
+                            </div>
+                            <span style="font-size: 0.75rem; color: var(--text-muted);">
+                                Message the bot to get your Chat ID, then enter it here to receive private alerts.
+                            </span>
+                        </div>
+                    </div>
+
                     <!-- Form Actions -->
                     <div style="display: flex; justify-content: flex-end; gap: 0.8rem; border-top: 1px solid var(--border-glass); padding-top: 1.2rem;">
                         <span id="settings-status-msg" style="margin-right: auto; align-self: center; font-size: 0.85rem; font-weight: 500;"></span>
@@ -486,103 +956,165 @@
             </div>
         </div>
 
-        <!-- TAB 6: PAPER TRADING -->
-        <div id="tab-paper" class="tab-panel">
-            <div class="terminal-layout-grid" style="grid-template-columns: 1fr 2fr; margin-top: 1rem;">
-                
-                <!-- COLUMN 1: Session Controls -->
-                <div class="grid-col flex-col">
-                    <div class="card">
-                        <h2>Session Configuration</h2>
-                        <div class="details-grid-risk" style="margin-bottom: 1.5rem;">
-                            <div><strong>Session ID:</strong> <span id="paper-sess-id">-</span></div>
-                            <div><strong>Session Status:</strong> <span class="badge" id="paper-sess-status">STOPPED</span></div>
-                        </div>
-                        
-                        <form id="paper-start-form" onsubmit="startPaperSession(event)" style="display: flex; flex-direction: column; gap: 1rem;">
-                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Starting Capital (INR ₹)</label>
-                                <input type="number" id="paper-init-capital" value="1000000" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
-                            </div>
-                            
-                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Simulated Latency (ms)</label>
-                                <input type="number" id="paper-latency" value="50" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
-                            </div>
-                            
-                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Simulated Slippage (%)</label>
-                                <input type="number" step="0.0001" id="paper-slippage" value="0.05" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
-                            </div>
-                            
-                            <div class="form-group" style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.8rem; color: var(--text-secondary);">Simulated Spread (%)</label>
-                                <input type="number" step="0.0001" id="paper-spread" value="0.02" style="padding: 0.55rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.2); color: var(--text-primary); font-size: 0.85rem;">
-                            </div>
-                            
-                            <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
-                                <button type="submit" class="btn-success" style="flex: 1; font-weight: 600;">Start Session</button>
-                                <button type="button" class="btn-danger" onclick="stopPaperSession()" style="flex: 1; font-weight: 600;">Stop Session</button>
-                            </div>
-                        </form>
-                        <div id="paper-status-msg" style="text-align: center; font-size: 0.8rem; margin-top: 0.75rem; font-weight: 500;"></div>
+        <!-- TAB 9: ADMIN CONTROLS -->
+        <div id="tab-admin" class="tab-panel">
+            <div class="card" style="margin-top: 1rem; max-width: 1000px; margin-left: auto; margin-right: auto;">
+                <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border-glass); padding-bottom: 1rem; margin-bottom: 1.5rem;">
+                    <div>
+                        <h2 style="color: var(--accent-orange); margin: 0;">System Administrator Control Panel</h2>
+                        <p style="color: var(--text-secondary); font-size: 0.85rem; margin: 0.2rem 0 0 0;">Manage enterprise users, change billing tiers, and perform manual password resets.</p>
                     </div>
+                    <span style="font-size: 0.8rem; background: rgba(255, 159, 10, 0.15); color: var(--accent-orange); border: 1px solid rgba(255, 159, 10, 0.3); padding: 0.3rem 0.6rem; border-radius: 4px; font-weight: 600;">ADMIN PRIVILEGES</span>
                 </div>
-                
-                <!-- COLUMN 2: Live Metrics & Virtual Tables -->
-                <div class="grid-col flex-col">
-                    <!-- Session Metrics Cards -->
-                    <div class="summary-cards-container" style="grid-template-columns: repeat(4, 1fr);">
-                        <div class="metric-card">
-                            <span class="label">Virtual Capital</span>
-                            <span class="value text-green" id="paper-capital">₹1,000,000.00</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="label">Session Net P&amp;L</span>
-                            <span class="value" id="paper-pnl">₹0.00</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="label">Trades Executed</span>
-                            <span class="value" id="paper-trades-count">0</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="label">Session Win Rate</span>
-                            <span class="value accent-blue" id="paper-win-rate">0.0%</span>
-                        </div>
-                    </div>
-                    
-                    <!-- Paper Positions -->
-                    <div class="card flex-grow-1">
-                        <h2>Paper Open Positions</h2>
-                        <div class="table-wrapper">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Symbol</th>
-                                        <th>Side</th>
-                                        <th>Qty</th>
-                                        <th>Avg Price</th>
-                                        <th>LTP</th>
-                                        <th>P&amp;L</th>
-                                        <th>Exit</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="paper-positions-body">
-                                    <tr>
-                                        <td colspan="7" class="text-center text-muted">No open virtual positions. Start a session to trade.</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
+
+                <div class="table-wrapper" style="background: rgba(0,0,0,0.2); border-radius: 8px; border: 1px solid var(--border-glass); overflow: hidden;">
+                    <table>
+                        <thead>
+                            <tr style="background: rgba(255,255,255,0.02);">
+                                <th style="padding: 0.8rem; text-align: left; font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">User Identity</th>
+                                <th style="padding: 0.8rem; text-align: left; font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">Mobile Number</th>
+                                <th style="padding: 0.8rem; text-align: left; font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">Active Tier</th>
+                                <th style="padding: 0.8rem; text-align: left; font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">Change Subscription Tier</th>
+                                <th style="padding: 0.8rem; text-align: left; font-size: 0.85rem; color: var(--text-secondary); font-weight: 600;">Manual Password Reset</th>
+                            </tr>
+                        </thead>
+                        <tbody id="admin-users-tbody">
+                            <tr>
+                                <td colspan="5" class="text-center text-muted" style="padding: 2rem;">Loading registered users list...</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
-                
             </div>
         </div>
 
     </div>
+        </div>
+    </div>
+
+    <!-- SaaS Authentication Overlay -->
+    <div id="auth-overlay" class="auth-overlay">
+        <div class="auth-container">
+            <div class="auth-header">
+                <img src="/static/img/logo-full.png" alt="SPV Quantum" class="auth-logo">
+                <p>Enterprise SaaS Trading Terminal Portal</p>
+            </div>
+
+            <!-- Login Card -->
+            <div id="auth-login-card" class="auth-card">
+                <h2>Access Terminal</h2>
+                <form id="auth-login-form" onsubmit="handleAuthSubmit(event, 'login')">
+                    <div class="auth-group">
+                        <label for="login-email">Username or Email</label>
+                        <input type="text" id="login-email" required placeholder="Enter username or email">
+                    </div>
+                    <div class="auth-group">
+                        <label for="login-password">Password</label>
+                        <input type="password" id="login-password" required placeholder="••••••••">
+                    </div>
+                    <div id="login-error-msg" class="auth-error-msg" style="color: var(--accent-red); font-size: 0.85rem; margin-top: 0.4rem; display: none;"></div>
+                    <button type="submit" class="auth-btn">Log In to Terminal</button>
+                </form>
+                <div class="auth-footer" style="display: flex; flex-direction: column; gap: 0.5rem; text-align: center;">
+                    <span>Don't have an account? <a href="#" onclick="toggleAuthForm('register')">Create Account</a></span>
+                    <span><a href="#" onclick="toggleAuthForm('reset-password')" style="color: var(--text-secondary); font-size: 0.85rem;">Forgot Password?</a></span>
+                </div>
+            </div>
+
+            <!-- Reset Password Card -->
+            <div id="auth-reset-card" class="auth-card" style="display: none;">
+                <h2>Reset Password</h2>
+                <div class="auth-group" style="text-align: center; padding: 1.2rem 0; display: flex; flex-direction: column; gap: 0.8rem; align-items: center;">
+                    <span style="font-size: 2.2rem;">🔒</span>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.5; margin: 0;">
+                        For security reasons, password resets must be done manually by the System Administrator.
+                    </p>
+                    <p style="color: var(--accent-orange); font-size: 1.05rem; font-weight: 600; margin: 0.5rem 0 1rem 0; border: 1px dashed rgba(255, 159, 10, 0.3); padding: 0.5rem 1rem; border-radius: 6px; background: rgba(255, 159, 10, 0.05); width: 100%;">
+                        Please contact Sanjay Bhai to reset your password.
+                    </p>
+                </div>
+                <div class="auth-footer">
+                    <span>Back to <a href="#" onclick="toggleAuthForm('login')">Sign In</a></span>
+                </div>
+            </div>
+
+            <!-- Register Card -->
+            <div id="auth-register-card" class="auth-card" style="display: none;">
+                <h2>Create Enterprise Account</h2>
+                <form id="auth-register-form" onsubmit="handleAuthSubmit(event, 'register')">
+                    <div class="auth-group">
+                        <label for="register-email">Email Address</label>
+                        <input type="email" id="register-email" required placeholder="name@company.com">
+                    </div>
+                    <div class="auth-group">
+                        <label for="register-phone">Mobile Number</label>
+                        <input type="tel" id="register-phone" required placeholder="e.g. +91 98765 43210">
+                    </div>
+                    <div class="auth-group">
+                        <label for="register-password">Password</label>
+                        <input type="password" id="register-password" required placeholder="••••••••">
+                    </div>
+                    <div class="auth-group">
+                        <label for="register-plan">Select Subscription Plan</label>
+                        <select id="register-plan" onchange="updatePlanDetails()" style="padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border-glass); background: rgba(0,0,0,0.4); color: var(--text-primary); font-size: 0.9rem; width: 100%;">
+                            <option value="FREE">Free Trial (Equity segment only)</option>
+                            <option value="SILVER">Pro Silver (Equity + Trend Intel)</option>
+                            <option value="GOLD">Pro Gold (Equity, Trend & Volume Intel)</option>
+                            <option value="PLATINUM">Enterprise Platinum (All segments + All AI Employees)</option>
+                        </select>
+                    </div>
+
+                    <!-- Dynamic Pricing Card -->
+                    <div id="plan-features-card" class="plan-features-card" style="margin-top: 1rem; padding: 0.8rem; border-radius: 6px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-glass);">
+                        <div class="plan-price" id="plan-price" style="font-weight: 700; font-size: 1.1rem; color: var(--accent-blue); margin-bottom: 0.4rem;">₹0 / Free</div>
+                        <ul class="plan-features-list" id="plan-features-list" style="font-size: 0.8rem; color: var(--text-secondary); list-style: none; padding-left: 0; margin: 0; display: flex; flex-direction: column; gap: 0.3rem;">
+                            <li>✓ Access to Spot Equity segment</li>
+                            <li>✓ Standard Order execution</li>
+                            <li>✗ Restricted: Options & Commodity trading</li>
+                            <li>✗ Restricted: Premium Volume Intelligence</li>
+                        </ul>
+                    </div>
+
+                    <div id="register-error-msg" class="auth-error-msg" style="color: var(--accent-red); font-size: 0.85rem; margin-top: 0.4rem; display: none;"></div>
+                    <button type="submit" class="auth-btn">Start Trading Now</button>
+                </form>
+                <div class="auth-footer">
+                    <span>Already have an account? <a href="#" onclick="toggleAuthForm('login')">Sign In</a></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Payment QR Modal -->
+    <div id="payment-modal" class="auth-overlay" style="display: none; z-index: 9999;">
+        <div class="auth-container" style="max-width: 420px; padding: 2rem;">
+            <div style="text-align: center; margin-bottom: 1rem;">
+                <h2 style="color: var(--accent-blue); margin-bottom: 0.5rem;">Activate Subscription Plan</h2>
+                <p style="color: var(--text-secondary); font-size: 0.85rem;">Scan QR code using any UPI App (GPay, PhonePe, Paytm)</p>
+            </div>
+            
+            <div style="display: flex; flex-direction: column; align-items: center; gap: 1rem; background: rgba(255,255,255,0.03); padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border-glass);">
+                <div id="payment-plan-title" style="font-weight: 700; font-size: 1.1rem; color: var(--accent-orange);">Pro Plan</div>
+                <div id="payment-plan-price" style="font-weight: 800; font-size: 1.5rem; color: var(--text-primary);">₹0</div>
+                
+                <!-- Dynamic QR Code Container -->
+                <img id="payment-qr-img" src="" alt="UPI QR Code" style="width: 200px; height: 200px; border-radius: 8px; border: 4px solid white; background: white;">
+                
+                <div style="font-size: 0.85rem; color: var(--text-muted); text-align: center;">
+                    UPI ID: <strong style="color: var(--accent-blue);">parmarsanjayb74@okaxis</strong>
+                </div>
+            </div>
+            
+            <div style="margin-top: 1.2rem; display: flex; flex-direction: column; gap: 0.8rem;">
+                <div style="font-size: 0.8rem; color: var(--accent-green); text-align: center; line-height: 1.4; border: 1px dashed rgba(0, 245, 160, 0.2); padding: 0.5rem; border-radius: 6px; background: rgba(0, 245, 160, 0.03);">
+                    ✓ Request submitted! Once paid, send screenshot to Sanjay Bhai for manual activation.
+                </div>
+                <button class="auth-btn" onclick="closePaymentModal()" style="background: var(--gradient-blue); color: black; font-weight: 600;">Done / Close</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Load App Controller Script -->
-    <script src="/static/js/app.js?v=2.0.3"></script>
+    <script src="/static/js/app.js?v=2.9.0"></script>
 </body>
 </html>

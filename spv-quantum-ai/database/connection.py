@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import DeclarativeBase
 from core.config import settings
@@ -13,15 +14,19 @@ def get_engine(url: str):
         return create_async_engine(
             url,
             echo=False,
-            future=True
+            future=True,
+            pool_size=20,
+            max_overflow=30,
+            pool_recycle=1800,
+            connect_args={"timeout": 60}
         )
     else:
         return create_async_engine(
             url,
             echo=False,
             future=True,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=20,
+            max_overflow=30,
             pool_recycle=1800
         )
 
@@ -49,6 +54,18 @@ async def init_db() -> None:
         async with engine.begin() as conn:
             # Create all tables using metadata schema
             await conn.run_sync(Base.metadata.create_all)
+            
+            # Auto-migrate: add user_id column if it doesn't exist
+            for table in ["orders", "trades", "agent_reports", "performance", "strategy_definitions"]:
+                try:
+                    await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN user_id VARCHAR;"))
+                except Exception:
+                    pass
+            try:
+                await conn.execute(text("ALTER TABLE users ADD COLUMN telegram_chat_id VARCHAR;"))
+            except Exception:
+                pass
+                    
         logger.info("Database schemas initialized successfully.")
     except Exception as e:
         if "postgresql" in DATABASE_URL:
@@ -59,6 +76,15 @@ async def init_db() -> None:
             try:
                 async with engine.begin() as conn:
                     await conn.run_sync(Base.metadata.create_all)
+                    for table in ["orders", "trades", "agent_reports", "performance", "strategy_definitions"]:
+                        try:
+                            await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN user_id VARCHAR;"))
+                        except Exception:
+                            pass
+                    try:
+                        await conn.execute(text("ALTER TABLE users ADD COLUMN telegram_chat_id VARCHAR;"))
+                    except Exception:
+                        pass
                 logger.info("Database schemas initialized successfully using SQLite fallback.")
                 return
             except Exception as ex:

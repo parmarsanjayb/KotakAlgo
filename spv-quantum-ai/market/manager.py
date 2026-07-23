@@ -33,12 +33,12 @@ class MarketDataManager:
         self.instruments = InstrumentManager()
         self.status      = MarketStatusManager()
         self.history     = HistoricalDataManager()
-        self.health      = FeedHealthMonitor(stale_threshold_sec=5.0)
+        self.health      = FeedHealthMonitor(stale_threshold_sec=60.0)
 
         self.candles     = CandleManager(self.cache, self._on_candle_close)
         self.ticks       = TickDataManager(self.cache)
-        self.options     = OptionChainManager(self.cache)
-        self.stream      = WebSocketStreamManager(self._on_raw_tick, self.health)
+        self.options     = OptionChainManager(self.cache, self.registry)
+        self.stream      = WebSocketStreamManager(self._on_raw_tick, self.health, self.instruments, self.registry)
 
         self._running: bool = False
         self._options_task: Optional[asyncio.Task] = None
@@ -51,55 +51,12 @@ class MarketDataManager:
         self._running = True
         logger.info("Starting Market Data Engine...")
 
-        await self.status.set_status(MarketSession.OPEN)
+        await self.status.start_auto_tracking()
         await self.health.start()
-        await self._seed_historical_candles()
         await self.stream.start()
 
         self._options_task = asyncio.create_task(self._options_loop())
         logger.info("Market Data Engine running.")
-
-    async def _seed_historical_candles(self) -> None:
-        logger.info("Seeding historical 1m candles to warm up all caches...")
-        import random
-        from datetime import datetime, timedelta, timezone
-        from market.models import Timeframe, Candle
-
-        now = datetime.now(timezone.utc)
-        symbols = self.registry.get_symbols()
-        base_prices = {"BTCUSD": 65000.0, "ETHUSD": 3500.0, "NIFTY50": 24200.0, "BANKNIFTY": 58294.80}
-
-        for symbol in symbols:
-            price = base_prices.get(symbol, 100.0)
-            for i in range(35):
-                ts = now - timedelta(minutes=(35 - i))
-                change = random.uniform(-0.001, 0.001)
-                o = price
-                c = price * (1.0 + change)
-                h = max(o, c) * random.uniform(1.0, 1.002)
-                l = min(o, c) * random.uniform(0.998, 1.0)
-                v = random.uniform(100.0, 1000.0)
-                price = c
-
-                candle = Candle(
-                    symbol=symbol,
-                    timeframe=Timeframe.M1,
-                    timestamp=ts,
-                    open=round(o, 4),
-                    high=round(h, 4),
-                    low=round(l, 4),
-                    close=round(c, 4),
-                    volume=round(v, 4),
-                    vwap=round((o + h + l + c) / 4, 4),
-                )
-                await self.cache.update_candle(candle)
-                
-                # Publish event
-                await event_bus.publish(EventModel(
-                    event_type="candle",
-                    source_agent="market_data_manager",
-                    payload={"candle": candle.model_dump()}
-                ))
 
     async def stop(self) -> None:
         self._running = False
@@ -111,6 +68,7 @@ class MarketDataManager:
                 pass
         await self.stream.stop()
         await self.health.stop()
+        await self.status.stop_auto_tracking()
         await self.status.set_status(MarketSession.CLOSED)
         logger.info("Market Data Engine stopped.")
 
@@ -127,6 +85,57 @@ class MarketDataManager:
             source_agent = "market_data_manager",
             payload      = TickEvent(tick=tick).model_dump(),
         ))
+
+        # Generate synthetic tick events for options if they are the active symbol or have open positions
+        try:
+            from trading.context import trading_context_manager
+            from portfolio.engine import portfolio_engine
+            
+            active = trading_context_manager.get_active_symbol()
+            
+            # Gather symbols to update
+            symbols_to_update = []
+            if active and ("CE" in active or "PE" in active):
+                symbols_to_update.append(active)
+                
+            # Add option symbols with open positions
+            open_positions = [p.symbol for p in await portfolio_engine.positions.get_all_positions() if p.quantity != 0]
+            for p_sym in open_positions:
+                if ("CE" in p_sym or "PE" in p_sym) and p_sym not in symbols_to_update:
+                    symbols_to_update.append(p_sym)
+                    
+            for opt_sym in symbols_to_update:
+                # Check if this option belongs to the incoming tick's underlying
+                import re
+                sym_clean = opt_sym.upper().replace(" ", "").replace("_", "").replace("-", "")
+                match = re.match(r"^([A-Z\&]+)(\d{2}[A-Z]{3})(\d+(?:\.\d+)?)(CE|PE)$", sym_clean)
+                if match:
+                    parsed_underlying = match.group(1)
+                    underlying_map = {
+                        "NIFTY": "NIFTY50",
+                        "BANKNIFTY": "BANKNIFTY",
+                        "FINNIFTY": "FINNIFTY",
+                        "MIDCPNIFTY": "MIDCPNIFTY",
+                        "SENSEX": "SENSEX"
+                    }
+                    underlying = underlying_map.get(parsed_underlying, parsed_underlying)
+                    if underlying == tick.symbol:
+                        opt_ltp = await self.get_ltp(opt_sym)
+                        if opt_ltp > 0:
+                            opt_tick = MarketData(
+                                symbol=opt_sym,
+                                ltp=opt_ltp,
+                                volume=1000.0,
+                                open_interest=5000.0,
+                                timestamp=tick.timestamp
+                            )
+                            await event_bus.publish(EventModel(
+                                event_type   = "tick",
+                                source_agent = "market_data_manager",
+                                payload      = TickEvent(tick=opt_tick).model_dump(),
+                            ))
+        except Exception as e:
+            logger.error("Error generating synthetic option tick", error=str(e))
 
     async def _on_candle_close(self, candle: Candle) -> None:
         """Invoked by CandleManager when a timeframe bar completes."""
@@ -157,7 +166,36 @@ class MarketDataManager:
 
     async def get_ltp(self, symbol: str) -> float:
         t = await self.cache.get_tick(symbol)
-        return t.ltp if t else 0.0
+        if t and t.ltp > 0:
+            return t.ltp
+            
+        # Fallback for option symbols to calculate synthetic LTP
+        import re
+        sym_clean = symbol.upper().replace(" ", "").replace("_", "").replace("-", "")
+        match = re.match(r"^([A-Z\&]+)(\d{2}[A-Z]{3})(\d+(?:\.\d+)?)(CE|PE)$", sym_clean)
+        if match:
+            parsed_underlying = match.group(1)
+            strike = float(match.group(3))
+            option_type = match.group(4)
+            
+            underlying_map = {
+                "NIFTY": "NIFTY50",
+                "BANKNIFTY": "BANKNIFTY",
+                "FINNIFTY": "FINNIFTY",
+                "MIDCPNIFTY": "MIDCPNIFTY",
+                "SENSEX": "SENSEX"
+            }
+            underlying = underlying_map.get(parsed_underlying, parsed_underlying)
+            
+            ut = await self.cache.get_tick(underlying)
+            spot = ut.ltp if (ut and ut.ltp > 0) else (24000.0 if "NIFTY" in underlying else (52000.0 if "BANK" in underlying else 100.0))
+            if spot > 0:
+                intrinsic = max(0.0, spot - strike) if option_type == "CE" else max(0.0, strike - spot)
+                dist = abs(spot - strike)
+                time_val = max(2.0, 90.0 - dist * 0.5)
+                return round(intrinsic + time_val, 2)
+                
+        return 0.0
 
     async def get_candle(self, symbol: str, timeframe: Timeframe) -> Optional[Candle]:
         return await self.cache.get_candle(symbol, timeframe)

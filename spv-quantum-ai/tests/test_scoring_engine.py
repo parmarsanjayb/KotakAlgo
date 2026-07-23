@@ -3,6 +3,7 @@ import asyncio
 from datetime import datetime, timezone
 from market.models import Timeframe
 from analysis.models import MarketAnalysisReport
+from scanner.models import ScanResult
 from scoring.models import DecisionScoreResult, DecisionQuality, DecisionScoreEvent
 from scoring.weights import WeightManager
 from scoring.calculator import ConfidenceCalculator
@@ -14,7 +15,7 @@ from core.bus import event_bus, EventModel
 
 def test_weight_manager_values():
     wm = WeightManager()
-    assert wm.min_confidence_threshold == 60.0
+    assert wm.min_confidence_threshold == 70.0
     assert wm.get_weight("market_analysis") == 0.30
     assert wm.get_weight("market_regime") == 0.20
     assert wm.get_weight("strategy_match") == 0.25
@@ -162,4 +163,71 @@ async def test_decision_scoring_engine_integration():
     await engine.stop()
     await event_bus.unsubscribe("decision_score", cb)
     await event_bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_decision_scoring_engine_scanner_match_integration():
+    """Scanner opportunities must also trigger an automatic decision score evaluation."""
+    event_bus.start()
+
+    engine = DecisionScoringEngine()
+    await engine.start()
+
+    published_scores = []
+    async def cb(evt: EventModel):
+        published_scores.append(evt)
+
+    await event_bus.subscribe("decision_score", cb)
+
+    scan_result = ScanResult(
+        symbol="INFY",
+        exchange="NSE",
+        segment="Equity",
+        scanner_name="volume_spike",
+        priority=1,
+        confidence=80.0,
+        matched_conditions=["Volume spike: 5000.0 > average 2000.0 * 2.0"]
+    )
+
+    await event_bus.publish(EventModel(
+        event_type="scanner_match",
+        source_agent="market_scanner_engine",
+        payload={"scan_result": scan_result.model_dump()}
+    ))
+
+    for _ in range(20):
+        if len(published_scores) >= 1:
+            break
+        await asyncio.sleep(0.05)
+
+    assert len(published_scores) == 1
+    score = published_scores[0].payload["decision_score"]
+    assert score["symbol"] == "INFY"
+    assert score["timeframe"] == Timeframe.M1.value
+
+    cached = await engine.get_latest("INFY", Timeframe.M1.value)
+    assert cached is not None
+
+    await engine.stop()
+    await event_bus.unsubscribe("decision_score", cb)
+    await event_bus.stop()
+
+
+@pytest.mark.asyncio
+async def test_evaluate_decision_translates_risk_engine_vocabulary():
+    """RiskEngine.get_dashboard_metrics() reports OPERATIONAL/RESTRICTED (system-wide
+    health), not the ALLOW/BLOCK/REDUCE_POSITION vocabulary used elsewhere in risk
+    decisions. evaluate_decision() must translate it and expose the translated value
+    on DecisionScoreResult.risk_status so downstream consumers (ChiefDecisionAgent)
+    never see the raw dashboard vocabulary."""
+    engine = DecisionScoringEngine()
+
+    result = await engine.evaluate_decision("WIPRO", Timeframe.M1)
+
+    assert result.risk_status in ("ALLOW", "BLOCK")
+    assert result.component_scores["risk_status"] in (0.0, 60.0, 100.0)
+    if result.risk_status == "ALLOW":
+        assert result.component_scores["risk_status"] == 100.0
+    else:
+        assert result.component_scores["risk_status"] == 0.0
 

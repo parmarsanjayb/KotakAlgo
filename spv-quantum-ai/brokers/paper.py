@@ -1,7 +1,6 @@
 import time
 import uuid
 import random
-import asyncio
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -45,17 +44,67 @@ class PaperBroker(BaseBroker):
     async def connect(self) -> BrokerResponse:
         t0 = time.perf_counter()
         self._connected = True
+        from core.bus import event_bus
+        await event_bus.subscribe("tick", self._on_tick)
         latency = (time.perf_counter() - t0) * 1000
         logger.info("PaperBroker connected.", balance=self._balance)
         return BrokerResponse(success=True, broker=self.name, latency_ms=latency)
 
     async def disconnect(self) -> BrokerResponse:
         self._connected = False
+        from core.bus import event_bus
+        try:
+            await event_bus.unsubscribe("tick", self._on_tick)
+        except Exception:
+            pass
         logger.info("PaperBroker disconnected.")
         return BrokerResponse(success=True, broker=self.name)
 
     def is_connected(self) -> bool:
         return self._connected
+
+    async def _on_tick(self, event: EventModel) -> None:
+        try:
+            tick = event.payload.get("tick", event.payload)
+            symbol = tick.get("symbol")
+            close = float(tick.get("close") or tick.get("ltp") or 0.0)
+            if not symbol or close <= 0:
+                return
+
+            pos = self._positions.get(symbol)
+            if pos:
+                pos.ltp = close
+                # Check stop_loss hit
+                if pos.stop_loss is not None:
+                    hit_sl = (pos.side == OrderSide.BUY and close <= pos.stop_loss) or \
+                             (pos.side == OrderSide.SELL and close >= pos.stop_loss)
+                    if hit_sl:
+                        logger.info(f"PaperBroker SL HIT for {symbol}", close=close, sl=pos.stop_loss)
+                        await self.place_order(
+                            symbol=symbol,
+                            side=OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY,
+                            quantity=pos.quantity,
+                            order_type=OrderType.MARKET,
+                            price=close
+                        )
+                        return
+
+                # Check target hit
+                if pos.target is not None:
+                    hit_tgt = (pos.side == OrderSide.BUY and close >= pos.target) or \
+                              (pos.side == OrderSide.SELL and close <= pos.target)
+                    if hit_tgt:
+                        logger.info(f"PaperBroker TARGET HIT for {symbol}", close=close, tgt=pos.target)
+                        await self.place_order(
+                            symbol=symbol,
+                            side=OrderSide.SELL if pos.side == OrderSide.BUY else OrderSide.BUY,
+                            quantity=pos.quantity,
+                            order_type=OrderType.MARKET,
+                            price=close
+                        )
+                        return
+        except Exception as e:
+            logger.error("PaperBroker failed to evaluate tick in simulation", error=str(e))
 
     # ── Authentication ───────────────────────────────────────────────────────
 
@@ -106,10 +155,14 @@ class PaperBroker(BaseBroker):
         return BrokerResponse(success=True, broker=self.name, data=margin_details)
 
     async def get_positions(self) -> BrokerResponse:
-        # Refresh unrealised P/L using dummy LTP
+        # Refresh unrealised P/L using the real Kotak Neo LTP for each symbol.
+        # Falls back to the position's own avg_price (flat, zero P&L) only if
+        # the feed genuinely has no data for that symbol yet — never a random walk.
+        from market.manager import market_data_manager
         positions = []
         for pos in self._positions.values():
-            ltp = pos.avg_price * (1 + random.uniform(-0.005, 0.005))
+            real_ltp = await market_data_manager.get_ltp(pos.symbol)
+            ltp = real_ltp if real_ltp else pos.avg_price
             pos.ltp = round(ltp, 2)
             if pos.side == OrderSide.BUY:
                 pos.unrealised_pnl = round((ltp - pos.avg_price) * pos.quantity, 2)
@@ -141,6 +194,7 @@ class PaperBroker(BaseBroker):
         price:         Optional[float] = None,
         trigger_price: Optional[float] = None,
         tag:           Optional[str] = None,
+        **kwargs:      Any,
     ) -> BrokerResponse:
         t0 = time.perf_counter()
         order_id = f"paper-{uuid.uuid4().hex[:10]}"
@@ -158,14 +212,6 @@ class PaperBroker(BaseBroker):
             broker=self.name,
         )
 
-        from paper.engine import paper_trading_engine
-
-        # ── Simulating configured execution queue latency ──
-        if paper_trading_engine.state.is_running:
-            delay_ms = paper_trading_engine.config.latency_ms
-            if delay_ms > 0:
-                await asyncio.sleep(delay_ms / 1000.0)
-
         # ── Simulate rejection ──
         if random.random() < self._rejection_rate:
             order.status = OrderStatus.REJECTED
@@ -179,21 +225,24 @@ class PaperBroker(BaseBroker):
             )
 
         # ── Execution price ──
-        if price:
-            exec_price = price
-        else:
-            exec_price = round(random.uniform(100, 5000), 2)
-
-        # ── Simulate configured slippage and spread ──
-        if paper_trading_engine.state.is_running:
-            cfg = paper_trading_engine.config
-            slippage = exec_price * cfg.slippage_pct
-            spread = exec_price * cfg.spread_pct
-            if side == OrderSide.BUY:
-                exec_price = exec_price + slippage + (spread / 2.0)
-            else:
-                exec_price = exec_price - slippage - (spread / 2.0)
-            exec_price = round(exec_price, 2)
+        # A LIMIT order carries its own price. A MARKET order legitimately has
+        # price=None from the caller — that must fill at the real current LTP,
+        # never a random number standing in for one.
+        exec_price = price
+        if not exec_price:
+            from market.manager import market_data_manager
+            exec_price = await market_data_manager.get_ltp(symbol)
+        if not exec_price:
+            order.status = OrderStatus.REJECTED
+            order.reject_reason = f"No live Kotak Neo price available for {symbol}; refusing to fill blind."
+            self._orders[order_id] = order
+            logger.warning("PaperBroker: order REJECTED — no live price", order_id=order_id, symbol=symbol)
+            latency = (time.perf_counter() - t0) * 1000
+            return BrokerResponse(
+                success=False, broker=self.name,
+                data=order.model_dump(), error=order.reject_reason, latency_ms=latency
+            )
+        exec_price = round(exec_price, 2)
 
         # ── Simulate partial fill (5 % chance) ──
         if random.random() < self._partial_fill_rate:
@@ -208,59 +257,65 @@ class PaperBroker(BaseBroker):
         order.avg_price = exec_price
         order.updated_at = datetime.now(timezone.utc)
 
-        cost = exec_price * filled_qty
+        # ── Update cash balance ──
+        cost       = exec_price * filled_qty
         commission = round(cost * self._commission_rate, 4)
         margin_req = round(cost / self._margin_multiplier, 4)
 
-        # ── Net Position & PNL Netting ──
-        pos = self._positions.get(symbol)
-        realized_pnl = 0.0
-
-        if not pos:
-            # Create new Position
-            self._positions[symbol] = Position(
-                symbol=symbol,
-                side=side,
-                quantity=filled_qty,
-                avg_price=exec_price,
-                broker=self.name
-            )
+        if side == OrderSide.BUY:
+            self._balance     -= (commission)
             self._used_margin += margin_req
         else:
-            # Net position logic
-            if pos.side == side:
-                # Adding to same side
-                total_qty = pos.quantity + filled_qty
-                pos.avg_price = round(
-                    (pos.avg_price * pos.quantity + exec_price * filled_qty) / total_qty, 4
-                )
-                pos.quantity = total_qty
-                self._used_margin += margin_req
-            else:
-                # Opposite side (close or partial close)
-                if filled_qty < pos.quantity:
-                    pnl = (exec_price - pos.avg_price) * filled_qty if pos.side == OrderSide.BUY else (pos.avg_price - exec_price) * filled_qty
-                    realized_pnl += pnl
-                    pos.quantity = round(pos.quantity - filled_qty, 4)
-                    self._used_margin = max(0.0, round(self._used_margin - margin_req, 4))
-                elif filled_qty == pos.quantity:
-                    pnl = (exec_price - pos.avg_price) * filled_qty if pos.side == OrderSide.BUY else (pos.avg_price - exec_price) * filled_qty
-                    realized_pnl += pnl
-                    self._positions.pop(symbol, None)
-                    self._used_margin = max(0.0, round(self._used_margin - margin_req, 4))
-                else:
-                    # Reversal
-                    pnl = (exec_price - pos.avg_price) * pos.quantity if pos.side == OrderSide.BUY else (pos.avg_price - exec_price) * pos.quantity
-                    realized_pnl += pnl
-                    
-                    remaining_qty = round(filled_qty - pos.quantity, 4)
-                    pos.side = side
-                    pos.quantity = remaining_qty
-                    pos.avg_price = exec_price
-                    self._used_margin = round((remaining_qty * exec_price) / self._margin_multiplier, 4)
+            self._balance     += (cost - commission)
+            self._used_margin  = max(0.0, self._used_margin - margin_req)
 
-        # ── Update virtual cash balance ──
-        self._balance += (realized_pnl - commission)
+        # ── Update position ──
+        # Netted per-symbol, not per symbol+side: an opposite-side fill
+        # against an existing position closes/reduces it instead of opening
+        # an independent "phantom" position for the same symbol. Keying by
+        # symbol+side previously meant every exit (hidden stop-loss, a
+        # strategy exit signal, or a manual close) left the original
+        # position sitting open forever while adding an unrelated reversed
+        # entry next to it.
+        existing = self._positions.get(symbol)
+        if existing is None:
+            self._positions[symbol] = Position(
+                symbol=symbol, side=side,
+                quantity=filled_qty, avg_price=exec_price, broker=self.name,
+                stop_loss=kwargs.get("stop_loss"),
+                target=kwargs.get("target")
+            )
+        elif existing.side == side:
+            total_qty = existing.quantity + filled_qty
+            existing.avg_price = round(
+                (existing.avg_price * existing.quantity + exec_price * filled_qty) / total_qty, 4
+            )
+            existing.quantity = total_qty
+        else:
+            close_qty = min(existing.quantity, filled_qty)
+            if existing.side == OrderSide.BUY:
+                realized = (exec_price - existing.avg_price) * close_qty
+            else:
+                realized = (existing.avg_price - exec_price) * close_qty
+            existing.realised_pnl += round(realized, 4)
+
+            remaining_existing = round(existing.quantity - close_qty, 6)
+            remaining_new      = round(filled_qty - close_qty, 6)
+
+            if remaining_existing > 0:
+                existing.quantity = remaining_existing
+            elif remaining_new > 0:
+                # Fully closed and reversed: the leftover fill opens a new
+                # position on the other side.
+                self._positions[symbol] = Position(
+                    symbol=symbol, side=side,
+                    quantity=remaining_new, avg_price=exec_price, broker=self.name,
+                    realised_pnl=existing.realised_pnl,
+                    stop_loss=kwargs.get("stop_loss"),
+                    target=kwargs.get("target")
+                )
+            else:
+                del self._positions[symbol]
 
         # ── Record trade ──
         trade = Trade(

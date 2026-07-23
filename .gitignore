@@ -1,14 +1,50 @@
-venv/
-.pytest_cache/
-__pycache__/
-*.pyc
-*.db
-*.log
+# ── Secrets / credentials — NEVER commit ─────────────────────────────
 .env
-.agents/
-*.zip
+.env.*
+!.env.example
 *.pem
-node_modules/
+*.key
+*.p12
+
+# ── Python ───────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
 .pytest_cache/
-spv-quantum-ai/.pytest_cache/
-spv-quantum-ai/.env
+.mypy_cache/
+
+# ── Virtual environments ─────────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Databases / local data dumps ─────────────────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ─────────────────────────────────────────────────────────────
+logs/
+*.log
+*.log.*
+
+# ── Archives / backups ───────────────────────────────────────────────
+*.zip
+*.bak
+*.bak.*
+
+# ── Data exports ─────────────────────────────────────────────────────
+*.csv
+
+# ── OS / editor cruft ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Claude Code local tooling ────────────────────────────────────────
+.claude/
+
+# ── Superseded monolithic copy (kept locally, not in repo) ───────────
+abcd/
+
+# Deploy script contains a hardcoded DB password — keep local only
+deploy.bat

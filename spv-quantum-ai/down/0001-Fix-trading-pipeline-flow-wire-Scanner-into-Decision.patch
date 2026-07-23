@@ -1,0 +1,251 @@
+From a4dba7d19a5616d27e4ab4f0c09b3088d837251b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 14:15:01 +0000
+Subject: [PATCH 1/7] Fix trading pipeline flow: wire Scanner into Decision
+ Score and route Chief Decision through Risk
+
+- scoring/engine.py: subscribe to scanner_match events so scanner opportunities
+  trigger a decision score evaluation, not just candle-driven market analysis.
+- agents/chief_decision_agent.py: approved decisions now publish order_request
+  (consumed by RiskAgent) instead of order_approved directly, so orders pass
+  through the dedicated Risk Agent before reaching Execution as intended by the
+  Market Feed -> Scanner -> Decision Score -> Chief Decision -> Risk -> Execution
+  -> Paper Broker -> Trade Saved -> Dashboard pipeline.
+- Fix AttributeError crash (self.name -> self.agent_name) and missing required
+  AgentResultModel fields (reason, processing_time) in ChiefDecisionAgent.analyze,
+  which previously crashed the agent after every decision.
+- Add integration tests covering the scanner-to-score and chief-decision-to-risk
+  wiring.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/agents/chief_decision_agent.py | 11 ++--
+ spv-quantum-ai/scoring/engine.py              | 17 ++++-
+ .../tests/test_chief_decision_agent.py        | 64 +++++++++++++++++++
+ spv-quantum-ai/tests/test_scoring_engine.py   | 49 ++++++++++++++
+ 4 files changed, 136 insertions(+), 5 deletions(-)
+
+diff --git a/spv-quantum-ai/agents/chief_decision_agent.py b/spv-quantum-ai/agents/chief_decision_agent.py
+index 00b9801..afc77c0 100644
+--- a/spv-quantum-ai/agents/chief_decision_agent.py
++++ b/spv-quantum-ai/agents/chief_decision_agent.py
+@@ -91,9 +91,9 @@ class DecisionPublisher:
+             source_agent="chief_decision_agent",
+             payload=payload
+         ))
+-        # Route to Execution Agent via live event loop
++        # Route through the Risk Agent for final order-level validation before execution
+         await event_bus.publish(EventModel(
+-            event_type="order_approved",
++            event_type="order_request",
+             source_agent="chief_decision_agent",
+             payload={
+                 "symbol": payload["symbol"],
+@@ -145,7 +145,7 @@ class ChiefDecisionAgent(BaseAgent):
+ 
+     @property
+     def output_event_types(self) -> List[str]:
+-        return ["trade_approved", "trade_rejected", "trade_blocked", "order_approved"]
++        return ["trade_approved", "trade_rejected", "trade_blocked", "order_request"]
+ 
+     async def initialize(self) -> None:
+         self.log_info("ChiefDecisionAgent initialized.")
+@@ -157,6 +157,7 @@ class ChiefDecisionAgent(BaseAgent):
+         if event.event_type != "decision_score":
+             return None
+ 
++        start_time = time.perf_counter()
+         score_data = event.payload.get("decision_score", event.payload)
+         symbol = score_data.get("symbol", "UNKNOWN")
+         confidence = float(score_data.get("overall_confidence", 0.0))
+@@ -209,8 +210,10 @@ class ChiefDecisionAgent(BaseAgent):
+             self.log_info(f"Chief Decision: {state} for symbol {symbol} | Reason: {explanation}")
+             
+             return AgentResultModel(
+-                agent_name=self.name,
++                agent_name=self.agent_name,
+                 signal=state,
+                 confidence=confidence,
++                reason=explanation,
++                processing_time=(time.perf_counter() - start_time) * 1000.0,
+                 metadata=record
+             )
+diff --git a/spv-quantum-ai/scoring/engine.py b/spv-quantum-ai/scoring/engine.py
+index ebf1808..eb774c0 100644
+--- a/spv-quantum-ai/scoring/engine.py
++++ b/spv-quantum-ai/scoring/engine.py
+@@ -38,11 +38,14 @@ class DecisionScoringEngine:
+         self._running = True
+         # Evaluate automatically when new market analysis reports are published
+         await event_bus.subscribe("market_analysis", self._on_market_analysis)
+-        logger.info("DecisionScoringEngine started and subscribed to market_analysis events.")
++        # Evaluate automatically when the Scanner surfaces a new opportunity
++        await event_bus.subscribe("scanner_match", self._on_scanner_match)
++        logger.info("DecisionScoringEngine started and subscribed to market_analysis and scanner_match events.")
+ 
+     async def stop(self) -> None:
+         self._running = False
+         await event_bus.unsubscribe("market_analysis", self._on_market_analysis)
++        await event_bus.unsubscribe("scanner_match", self._on_scanner_match)
+         logger.info("DecisionScoringEngine stopped.")
+ 
+     async def _on_market_analysis(self, event: EventModel) -> None:
+@@ -56,6 +59,18 @@ class DecisionScoringEngine:
+         except Exception as e:
+             logger.error("Error processing market analysis event in DecisionScoringEngine", error=str(e))
+ 
++    async def _on_scanner_match(self, event: EventModel) -> None:
++        try:
++            payload = event.payload
++            scan_result = payload.get("scan_result", payload)
++            symbol = scan_result.get("symbol")
++            if not symbol:
++                return
++            # Scanner engine evaluates opportunities on the M1 timeframe
++            await self.evaluate_decision(symbol, Timeframe.M1)
++        except Exception as e:
++            logger.error("Error processing scanner match event in DecisionScoringEngine", error=str(e))
++
+     async def evaluate_decision(
+         self, symbol: str, timeframe: Timeframe, provided_report: Optional[MarketAnalysisReport] = None
+     ) -> DecisionScoreResult:
+diff --git a/spv-quantum-ai/tests/test_chief_decision_agent.py b/spv-quantum-ai/tests/test_chief_decision_agent.py
+index 650f87c..969c3f7 100644
+--- a/spv-quantum-ai/tests/test_chief_decision_agent.py
++++ b/spv-quantum-ai/tests/test_chief_decision_agent.py
+@@ -121,3 +121,67 @@ async def test_chief_decision_agent_integration():
+     await agent.stop()
+     await event_bus.unsubscribe("trade_approved", cb)
+     await event_bus.stop()
++
++
++@pytest.mark.asyncio
++async def test_chief_decision_agent_routes_through_risk_before_execution():
++    """Approved decisions must be routed via order_request (Risk Agent) rather than
++    being sent straight to order_approved (Execution Agent), so the Risk step in the
++    Market Feed -> Scanner -> Decision Score -> Chief Decision -> Risk -> Execution
++    pipeline is not bypassed."""
++    event_bus.start()
++
++    agent = ChiefDecisionAgent()
++    await agent.start()
++
++    agent.approved_queue.clear()
++    agent.coordinator.reset_daily_trades()
++
++    portfolio_engine.summary.available_capital = 100000.0
++    async with portfolio_engine.positions._lock:
++        portfolio_engine.positions._positions.clear()
++
++    order_requests = []
++    order_approved_events = []
++
++    async def on_order_request(evt: EventModel):
++        order_requests.append(evt)
++
++    async def on_order_approved(evt: EventModel):
++        order_approved_events.append(evt)
++
++    await event_bus.subscribe("order_request", on_order_request)
++    await event_bus.subscribe("order_approved", on_order_approved)
++
++    await event_bus.publish(EventModel(
++        source_agent="decision_scoring_engine",
++        event_type="decision_score",
++        payload={
++            "symbol": "HDFCBANK",
++            "overall_confidence": 90.0,
++            "risk_status": "ALLOW",
++            "recommended_strategy": "ema_crossover",
++            "side": "BUY",
++            "quantity": 5.0,
++            "price": 1600.0
++        }
++    ))
++
++    for _ in range(20):
++        if len(order_requests) >= 1:
++            break
++        await asyncio.sleep(0.05)
++
++    assert len(order_requests) == 1
++    assert order_requests[0].payload["symbol"] == "HDFCBANK"
++    # The Chief Decision Agent must not publish order_approved directly - only the
++    # Risk Agent is allowed to do that after validating the order_request.
++    assert len(order_approved_events) == 0
++
++    # The agent must not crash while building its AgentResultModel.
++    assert agent.status == "RUNNING"
++
++    await agent.stop()
++    await event_bus.unsubscribe("order_request", on_order_request)
++    await event_bus.unsubscribe("order_approved", on_order_approved)
++    await event_bus.stop()
+diff --git a/spv-quantum-ai/tests/test_scoring_engine.py b/spv-quantum-ai/tests/test_scoring_engine.py
+index e3267db..dbce721 100644
+--- a/spv-quantum-ai/tests/test_scoring_engine.py
++++ b/spv-quantum-ai/tests/test_scoring_engine.py
+@@ -3,6 +3,7 @@ import asyncio
+ from datetime import datetime, timezone
+ from market.models import Timeframe
+ from analysis.models import MarketAnalysisReport
++from scanner.models import ScanResult
+ from scoring.models import DecisionScoreResult, DecisionQuality, DecisionScoreEvent
+ from scoring.weights import WeightManager
+ from scoring.calculator import ConfidenceCalculator
+@@ -163,3 +164,51 @@ async def test_decision_scoring_engine_integration():
+     await event_bus.unsubscribe("decision_score", cb)
+     await event_bus.stop()
+ 
++
++@pytest.mark.asyncio
++async def test_decision_scoring_engine_scanner_match_integration():
++    """Scanner opportunities must also trigger an automatic decision score evaluation."""
++    event_bus.start()
++
++    engine = DecisionScoringEngine()
++    await engine.start()
++
++    published_scores = []
++    async def cb(evt: EventModel):
++        published_scores.append(evt)
++
++    await event_bus.subscribe("decision_score", cb)
++
++    scan_result = ScanResult(
++        symbol="INFY",
++        exchange="NSE",
++        segment="Equity",
++        scanner_name="volume_spike",
++        priority=1,
++        confidence=80.0,
++        matched_conditions=["Volume spike: 5000.0 > average 2000.0 * 2.0"]
++    )
++
++    await event_bus.publish(EventModel(
++        event_type="scanner_match",
++        source_agent="market_scanner_engine",
++        payload={"scan_result": scan_result.model_dump()}
++    ))
++
++    for _ in range(20):
++        if len(published_scores) >= 1:
++            break
++        await asyncio.sleep(0.05)
++
++    assert len(published_scores) == 1
++    score = published_scores[0].payload["decision_score"]
++    assert score["symbol"] == "INFY"
++    assert score["timeframe"] == Timeframe.M1.value
++
++    cached = await engine.get_latest("INFY", Timeframe.M1.value)
++    assert cached is not None
++
++    await engine.stop()
++    await event_bus.unsubscribe("decision_score", cb)
++    await event_bus.stop()
++
+-- 
+2.43.0
+

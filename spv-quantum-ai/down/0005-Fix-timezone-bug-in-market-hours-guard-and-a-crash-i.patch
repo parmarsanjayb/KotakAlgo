@@ -1,0 +1,162 @@
+From c1790973fb264ea4e359c502032a31e054f173e7 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 7 Jul 2026 15:38:44 +0000
+Subject: [PATCH 5/7] Fix timezone bug in market-hours guard and a crash in
+ Telegram notifications
+
+The pipeline reached full APPROVED -> Risk-approved -> Execution for the
+first time this session (GOLD, 15:34:05 UTC), surfacing two real bugs at
+the last step before a fill:
+
+- safety/guard.py: TradingGuard.check_session/check_holiday/check_market_closing
+  computed "current time" via datetime.now(timezone.utc).astimezone() with no
+  explicit timezone, which resolves to the server/container's local timezone
+  (UTC in this environment) rather than India Standard Time. NSE market hours
+  (09:15-15:30) are always IST, so on a UTC server every check was comparing
+  the wrong clock entirely - it happened to spuriously block this order because
+  15:34 UTC coincidentally falls in the 09:15-15:30 window as a naive string,
+  even though real IST time was 21:04 (correctly after-hours, but for the wrong
+  reason). Fixed by explicitly converting to ZoneInfo("Asia/Kolkata").
+- telegram/bot.py: send_message() called logger.debug(msg, msg=message) - the
+  msg= keyword collided with the positional `msg` parameter StructuredLogger.debug()
+  already binds, raising "got multiple values for argument 'msg'" and crashing
+  the TelegramNotifier agent's execution_failed handler.
+
+Added regression tests: one verifies TradingGuard.check_session's decision
+matches independently-computed IST time (fails on a UTC server without the
+fix), the other reproduces the exact send_message() crash with no credentials
+configured.
+
+Note: with the timezone fix, real IST time is currently after NSE market hours
+(21:04 IST), so the session guard now correctly blocks new orders until the
+next real market open - this is expected behavior for a guard modeling real
+exchange hours, not a bug.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_017msKRAooRgtKyX1A2RMaxv
+---
+ spv-quantum-ai/safety/guard.py             | 11 ++++++++---
+ spv-quantum-ai/telegram/bot.py             |  2 +-
+ spv-quantum-ai/tests/test_safety_engine.py | 22 ++++++++++++++++++++++
+ spv-quantum-ai/tests/test_telegram_bot.py  | 18 ++++++++++++++++++
+ 4 files changed, 49 insertions(+), 4 deletions(-)
+ create mode 100644 spv-quantum-ai/tests/test_telegram_bot.py
+
+diff --git a/spv-quantum-ai/safety/guard.py b/spv-quantum-ai/safety/guard.py
+index 9fb1499..2f85161 100644
+--- a/spv-quantum-ai/safety/guard.py
++++ b/spv-quantum-ai/safety/guard.py
+@@ -1,11 +1,16 @@
+ import time
+ from datetime import datetime, timezone, time as dt_time
++from zoneinfo import ZoneInfo
+ from typing import Dict, Any, Tuple, Optional
+ from core.logging import get_logger
+ from brokers import broker_engine
+ 
+ logger = get_logger("trading_guard")
+ 
++# NSE market hours (09:15-15:30) are always defined in India Standard Time,
++# regardless of what timezone the server/container happens to run in.
++IST = ZoneInfo("Asia/Kolkata")
++
+ class TradingGuard:
+     """Evaluates various pre-trade risk controls and safety gates."""
+     def __init__(self, config: Dict[str, Any]) -> None:
+@@ -44,7 +49,7 @@ class TradingGuard:
+     async def check_session(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
+         if not self.config.get("trading_session_guard", True):
+             return True, ""
+-        now = datetime.now(timezone.utc).astimezone().time()
++        now = datetime.now(timezone.utc).astimezone(IST).time()
+         start = dt_time(9, 15)
+         end = dt_time(15, 30)
+         if now < start or now > end:
+@@ -55,7 +60,7 @@ class TradingGuard:
+         if not self.config.get("holiday_guard", True):
+             return True, ""
+         # Simulate simple holiday schedule (Saturday, Sunday)
+-        today = datetime.now(timezone.utc).astimezone().weekday()
++        today = datetime.now(timezone.utc).astimezone(IST).weekday()
+         if today >= 5:  # 5 is Saturday, 6 is Sunday
+             return False, "Holiday guard: trading is closed on weekends."
+         return True, ""
+@@ -63,7 +68,7 @@ class TradingGuard:
+     async def check_market_closing(self, order_data: Dict[str, Any]) -> Tuple[bool, str]:
+         if not self.config.get("market_closing_guard", True):
+             return True, ""
+-        now = datetime.now(timezone.utc).astimezone()
++        now = datetime.now(timezone.utc).astimezone(IST)
+         # Market closes at 15:30. Check if we are within 15 minutes of close
+         if now.hour == 15 and now.minute >= 15:
+             return False, "Market closing guard: new entry blocked within 15 minutes of market close."
+diff --git a/spv-quantum-ai/telegram/bot.py b/spv-quantum-ai/telegram/bot.py
+index 575f27a..6c30f94 100644
+--- a/spv-quantum-ai/telegram/bot.py
++++ b/spv-quantum-ai/telegram/bot.py
+@@ -40,7 +40,7 @@ class TelegramBotClient:
+             parse_mode: Formatting syntax choice ('HTML' or 'MarkdownV2').
+         """
+         if not self.api_url or not self.chat_id:
+-            logger.debug("Bypassed sending Telegram message (credentials absent)", msg=message)
++            logger.debug("Bypassed sending Telegram message (credentials absent)", telegram_message=message)
+             return False
+ 
+         if not self.client:
+diff --git a/spv-quantum-ai/tests/test_safety_engine.py b/spv-quantum-ai/tests/test_safety_engine.py
+index 1100b9e..d2c598f 100644
+--- a/spv-quantum-ai/tests/test_safety_engine.py
++++ b/spv-quantum-ai/tests/test_safety_engine.py
+@@ -130,3 +130,25 @@ async def test_hidden_stop_loss_and_trailing():
+         await event_bus.unsubscribe("hidden_stop_triggered", capture_hidden)
+         await event_bus.stop()
+         await safety_engine.stop()
++
++
++@pytest.mark.asyncio
++async def test_trading_guard_session_check_uses_ist_not_server_local_time():
++    """NSE market hours (09:15-15:30) are always in IST. TradingGuard.check_session
++    used to call .astimezone() with no timezone argument, which resolves to the
++    server/container's local timezone (UTC in this environment, or anything else
++    depending on deployment) instead of India Standard Time - so on a UTC server,
++    trades were spuriously allowed/blocked based on the wrong clock entirely."""
++    from datetime import datetime, timezone as tz, time as dt_time
++    from zoneinfo import ZoneInfo
++    from safety.guard import TradingGuard
++
++    guard = TradingGuard({"trading_session_guard": True})
++    allowed, reason = await guard.check_session({"symbol": "INFY"})
++
++    ist_now = datetime.now(tz.utc).astimezone(ZoneInfo("Asia/Kolkata")).time()
++    expected_allowed = dt_time(9, 15) <= ist_now <= dt_time(15, 30)
++
++    assert allowed == expected_allowed
++    if not expected_allowed:
++        assert "outside allowed window" in reason
+diff --git a/spv-quantum-ai/tests/test_telegram_bot.py b/spv-quantum-ai/tests/test_telegram_bot.py
+new file mode 100644
+index 0000000..d9c7a2e
+--- /dev/null
++++ b/spv-quantum-ai/tests/test_telegram_bot.py
+@@ -0,0 +1,18 @@
++import pytest
++from telegram.bot import TelegramBotClient
++
++
++@pytest.mark.asyncio
++async def test_send_message_without_credentials_does_not_crash():
++    """send_message() used to call logger.debug(msg, msg=message), which crashes
++    with 'StructuredLogger.debug() got multiple values for argument msg' because
++    the keyword collided with the positional parameter of the same name. This
++    crashed the TelegramNotifier agent every time an execution_failed/order_filled
++    event fired while no bot token/chat ID was configured."""
++    client = TelegramBotClient()
++    client.api_url = None
++    client.chat_id = None
++
++    result = await client.send_message("test message")
++
++    assert result is False
+-- 
+2.43.0
+

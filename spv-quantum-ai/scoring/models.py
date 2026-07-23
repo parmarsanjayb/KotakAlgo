@@ -16,11 +16,13 @@ class DecisionScoreResult(BaseModel):
     timeframe: str
     overall_confidence: float               # 0.0 - 100.0
     component_scores: Dict[str, float]      # name -> raw or weighted score
+    risk_status: str                        # ALLOW, BLOCK, REDUCE_POSITION
+    recommended_strategy: Optional[str]     = None
     decision_quality: DecisionQuality
-    risk_status: str = "BLOCK"
     missing_requirements: List[str]         = Field(default_factory=list)
     conflicting_signals: List[str]          = Field(default_factory=list)
     reasoning_summary: str
+    strategy_action: str                    = "SIGNAL_NONE"  # SIGNAL_BUY, SIGNAL_SELL, SIGNAL_NONE
     timestamp: datetime                     = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class DecisionScoreEvent(BaseModel):
