@@ -32,8 +32,6 @@ class TelegramNotifier(BaseAgent):
             types += ["trade_rejected", "trade_blocked"]
         if self.send_news:
             types += ["news_update"]
-        if self.send_alerts:
-            types += ["event_risk_alert"]
         return types
 
     @property
@@ -150,14 +148,6 @@ class TelegramNotifier(BaseAgent):
                 tag = f" <i>({syms})</i>" if syms else ""
                 lines.append(f"• {title}{tag}\n<code>{src}</code>")
             message = "\n".join(lines)
-
-        elif event.event_type == "event_risk_alert" and self.send_alerts:
-            drivers = ", ".join(payload.get("drivers", [])) or "multiple factors"
-            message = (
-                f"🛑 <b>[EVENT RISK: HIGH]</b>\n"
-                f"<b>Drivers:</b> {drivers}\n"
-                f"<b>Advice:</b> {payload.get('recommendation', 'Reduce exposure')}\n"
-            )
 
         elif event.event_type in ("trade_rejected", "trade_blocked") and self.send_alerts:
             reason = payload.get("reason", "Unknown restriction")
