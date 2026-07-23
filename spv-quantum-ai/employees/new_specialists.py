@@ -1159,9 +1159,34 @@ class OptionsSpecialistEmployee(BaseNewSpecialist):
             logger.error("Error in OptionsSpecialistEmployee _on_chain", error=str(e))
 
 
+# ── Shared real-analysis helpers for the segment specialists ─────────────────
+def _sma(vals: List[float], n: int) -> float:
+    """Simple moving average of the last n values."""
+    if not vals:
+        return 0.0
+    window = vals[-n:]
+    return sum(window) / len(window)
+
+
+def _rsi_signal(closes: List[float], rsi_buy: float = 55.0, rsi_sell: float = 45.0):
+    """RSI(14)-based BUY/SELL/WAIT with strength-scaled confidence.
+    Returns (recommendation, confidence, rsi)."""
+    if len(closes) < 15:
+        return ("WAIT", 50.0, 50.0)
+    rsi = calc_rsi(closes, 14)
+    if rsi >= rsi_buy:
+        return ("BUY", round(min(90.0, 50.0 + (rsi - 50.0) * 1.6), 1), round(rsi, 1))
+    if rsi <= rsi_sell:
+        return ("SELL", round(min(90.0, 50.0 + (50.0 - rsi) * 1.6), 1), round(rsi, 1))
+    return ("WAIT", 50.0, round(rsi, 1))
+
+
 class EquityIntradaySpecialistEmployee(BaseNewSpecialist):
+    """Intraday equity signal: RSI(14) confirmed by short-vs-medium momentum
+    (5-SMA vs 20-SMA). No longer a hardcoded BUY."""
     def __init__(self) -> None:
         super().__init__("EMP-EQI", "WAIT")
+        self._hist: Dict[str, List[float]] = {}
 
     async def start(self) -> None:
         await super().start()
@@ -1173,13 +1198,23 @@ class EquityIntradaySpecialistEmployee(BaseNewSpecialist):
 
     async def _on_candle(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            raw_candle = payload.get("candle", payload)
-            symbol = raw_candle.get("symbol", "NIFTY50")
+            c = event.payload.get("candle", event.payload)
+            if not c.get("complete", False):
+                return
+            symbol = c.get("symbol", "NIFTY50")
+            h = self._hist.setdefault(symbol, [])
+            h.append(float(c.get("close", 0.0)))
+            if len(h) > 60:
+                h.pop(0)
+            rec, conf, rsi = _rsi_signal(h)
+            # Require momentum agreement (5-SMA vs 20-SMA) to keep intraday signal honest
+            if rec == "BUY" and _sma(h, 5) <= _sma(h, 20):
+                rec, conf = "WAIT", 50.0
+            elif rec == "SELL" and _sma(h, 5) >= _sma(h, 20):
+                rec, conf = "WAIT", 50.0
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 65.0,
+                    "recommendation": rec, "confidence": conf, "rsi": rsi,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1187,8 +1222,11 @@ class EquityIntradaySpecialistEmployee(BaseNewSpecialist):
 
 
 class EquitySwingSpecialistEmployee(BaseNewSpecialist):
+    """Swing equity signal: 20-SMA vs 50-SMA trend crossover, confidence scaled
+    by the gap between the averages. No longer a hardcoded BUY."""
     def __init__(self) -> None:
         super().__init__("EMP-EQS", "WAIT")
+        self._hist: Dict[str, List[float]] = {}
 
     async def start(self) -> None:
         await super().start()
@@ -1200,13 +1238,25 @@ class EquitySwingSpecialistEmployee(BaseNewSpecialist):
 
     async def _on_candle(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            raw_candle = payload.get("candle", payload)
-            symbol = raw_candle.get("symbol", "NIFTY50")
+            c = event.payload.get("candle", event.payload)
+            if not c.get("complete", False):
+                return
+            symbol = c.get("symbol", "NIFTY50")
+            h = self._hist.setdefault(symbol, [])
+            h.append(float(c.get("close", 0.0)))
+            if len(h) > 120:
+                h.pop(0)
+            if len(h) < 51:
+                rec, conf, s20, s50 = "WAIT", 50.0, 0.0, 0.0
+            else:
+                s20, s50 = _sma(h, 20), _sma(h, 50)
+                gap_pct = (abs(s20 - s50) / s50 * 100.0) if s50 else 0.0
+                conf = round(min(85.0, 50.0 + gap_pct * 20.0), 1)
+                rec = "BUY" if s20 > s50 else "SELL" if s20 < s50 else "WAIT"
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 60.0,
+                    "recommendation": rec, "confidence": conf,
+                    "sma20": round(s20, 2), "sma50": round(s50, 2),
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1214,8 +1264,10 @@ class EquitySwingSpecialistEmployee(BaseNewSpecialist):
 
 
 class CommoditySpecialistEmployee(BaseNewSpecialist):
+    """Commodity signal: RSI(14) confirmed by 5-vs-20 SMA momentum."""
     def __init__(self) -> None:
         super().__init__("EMP-COM", "WAIT")
+        self._hist: Dict[str, List[float]] = {}
 
     async def start(self) -> None:
         await super().start()
@@ -1227,13 +1279,23 @@ class CommoditySpecialistEmployee(BaseNewSpecialist):
 
     async def _on_candle(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            raw_candle = payload.get("candle", payload)
-            symbol = raw_candle.get("symbol", "GOLD")
+            c = event.payload.get("candle", event.payload)
+            if not c.get("complete", False):
+                return
+            symbol = c.get("symbol", "GOLD")
+            h = self._hist.setdefault(symbol, [])
+            h.append(float(c.get("close", 0.0)))
+            if len(h) > 60:
+                h.pop(0)
+            rec, conf, rsi = _rsi_signal(h)
+            # Commodities trend hard — confirm RSI signal with 10-SMA slope
+            if rec == "BUY" and _sma(h, 5) <= _sma(h, 20):
+                rec, conf = "WAIT", 50.0
+            elif rec == "SELL" and _sma(h, 5) >= _sma(h, 20):
+                rec, conf = "WAIT", 50.0
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 68.0,
+                    "recommendation": rec, "confidence": conf, "rsi": rsi,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
@@ -1241,8 +1303,11 @@ class CommoditySpecialistEmployee(BaseNewSpecialist):
 
 
 class CurrencySpecialistEmployee(BaseNewSpecialist):
+    """Currency (USDINR) signal: RSI(14) confirmed by 10-vs-30 SMA trend.
+    Currency moves are small, so wider SMAs and tighter RSI bands."""
     def __init__(self) -> None:
         super().__init__("EMP-CUR", "WAIT")
+        self._hist: Dict[str, List[float]] = {}
 
     async def start(self) -> None:
         await super().start()
@@ -1254,13 +1319,22 @@ class CurrencySpecialistEmployee(BaseNewSpecialist):
 
     async def _on_candle(self, event: EventModel) -> None:
         try:
-            payload = event.payload
-            raw_candle = payload.get("candle", payload)
-            symbol = raw_candle.get("symbol", "USDINR")
+            c = event.payload.get("candle", event.payload)
+            if not c.get("complete", False):
+                return
+            symbol = c.get("symbol", "USDINR")
+            h = self._hist.setdefault(symbol, [])
+            h.append(float(c.get("close", 0.0)))
+            if len(h) > 60:
+                h.pop(0)
+            rec, conf, rsi = _rsi_signal(h, rsi_buy=58.0, rsi_sell=42.0)
+            if rec == "BUY" and _sma(h, 10) <= _sma(h, 30):
+                rec, conf = "WAIT", 50.0
+            elif rec == "SELL" and _sma(h, 10) >= _sma(h, 30):
+                rec, conf = "WAIT", 50.0
             async with self._lock:
                 self.latest_results[symbol] = {
-                    "recommendation": "BUY",
-                    "confidence": 62.0,
+                    "recommendation": rec, "confidence": conf, "rsi": rsi,
                     "timestamp": datetime.now(timezone.utc).isoformat()
                 }
         except Exception as e:
