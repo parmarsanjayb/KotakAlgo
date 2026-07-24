@@ -112,6 +112,9 @@ class StrategyEngine:
                 # timeframe=None keeps the legacy "every timeframe" behaviour.
                 if getattr(strategy, "timeframe", None) and strategy.timeframe != tf_str:
                     continue
+                # Scope: options strategies only apply to their index underlyings.
+                if getattr(strategy, "symbols", None) and symbol not in strategy.symbols:
+                    continue
                 matched = self.evaluator.evaluate_group(strategy.rules, context)
 
                 # Entry and exit conditions are designed to be mutually
@@ -159,16 +162,33 @@ class StrategyEngine:
                     action = (resp.required_action or "").upper()
                     side = "BUY" if action == "SIGNAL_BUY" else "SELL" if action == "SIGNAL_SELL" else None
                     mkt = context.get("current", {}).get("market_data", {})
-                    ltp = float(mkt.get("ltp") or mkt.get("close") or 0.0)
-                    if side and ltp > 0:
+                    order_symbol = symbol
+                    order_price = float(mkt.get("ltp") or mkt.get("close") or 0.0)
+
+                    # Options strategies trade the ATM option of the underlying,
+                    # not the index itself — resolve the real CE/PE contract from
+                    # the live chain (never fall back to trading the index).
+                    trade_as = getattr(strategy, "trade_as", None)
+                    if side and trade_as in ("ATM_CE", "ATM_PE"):
+                        want = "CE" if trade_as == "ATM_CE" else "PE"
+                        chain = await market_data_manager.get_option_chain(symbol)
+                        cands = [c for c in (chain.contracts if chain else [])
+                                 if c.option_type == want and c.ltp > 0 and getattr(c, "symbol", None)]
+                        if not cands:
+                            continue
+                        spot = float(chain.underlying_price or order_price)
+                        atm = min(cands, key=lambda c: abs(c.strike - spot))
+                        order_symbol, order_price = atm.symbol, float(atm.ltp)
+
+                    if side and order_price > 0:
                         await event_bus.publish(EventModel(
                             event_type="order_request",
                             source_agent="strategy_engine",
                             payload={
-                                "symbol": symbol,
+                                "symbol": order_symbol,
                                 "side": side,
                                 "quantity": 10.0,
-                                "price": ltp,
+                                "price": order_price,
                                 "type": "LIMIT",
                                 "strategy_name": strategy.name,
                                 "user_id": "spvquantam",

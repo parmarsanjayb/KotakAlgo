@@ -21,6 +21,8 @@ class Strategy(BaseModel):
     description: str = ""
     enabled: bool = True
     timeframe: Optional[str] = None          # e.g. "1D", "1H", "15m". None = evaluate on every timeframe (legacy).
+    symbols: Optional[List[str]] = None      # restrict to these underlyings (e.g. ["NIFTY50","BANKNIFTY"]). None = all.
+    trade_as: Optional[str] = None           # "ATM_CE" / "ATM_PE" => trade the ATM option of the underlying, not the underlying itself.
     rules: RuleGroup                          # entry condition (actions.matched)
     exit_rules: Optional[RuleGroup] = None     # exit condition (actions.exit), evaluated when rules didn't match
     actions: Dict[str, Any] = Field(default_factory=dict)
