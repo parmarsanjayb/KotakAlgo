@@ -29,6 +29,9 @@ class SafetyEngine:
                 "max_exposure_usd": 50000.0,
                 "hidden_sl_pct": 2.0,
                 "option_sl_pct": 25.0,         # options premiums swing hard — much wider stop than cash
+                "option_trail_pct": 15.0,      # option trailing fallback (no D1 ATR for option contracts)
+                "option_trail_pct_min": 12.0,  # option trailing never tighter than 12%
+                "option_trail_pct_max": 25.0,  # option trailing never wider than 25%
                 "trailing_stop_pct": 1.0,      # fixed fallback if ATR unavailable
                 "adaptive_trailing": True,     # volatility-adaptive (ATR-based) trailing
                 "atr_trail_mult": 2.5,         # trail width = 2.5 x ATR%

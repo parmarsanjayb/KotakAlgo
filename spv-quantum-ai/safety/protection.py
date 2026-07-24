@@ -183,6 +183,18 @@ class ProtectionManager:
         stop for volatile names (avoid whipsaw), tighter for calm ones. If ATR is
         unavailable, or adaptive_trailing is off, it safely falls back to the fixed
         configured percentage — so trailing never breaks."""
+        # Option premiums swing far harder than cash — use a wide trail band so a
+        # normal premium wiggle doesn't stop us out (matches the wide 25% option
+        # SL). Options also have no D1 ATR, so the wide fallback matters most.
+        is_option = bool(re.search(r"\d(CE|PE)$", symbol.upper()))
+        if is_option:
+            fallback_pct = float(self.config.get("option_trail_pct", 15.0))
+            lo = float(self.config.get("option_trail_pct_min", 12.0))
+            hi = float(self.config.get("option_trail_pct_max", 25.0))
+        else:
+            lo = float(self.config.get("trail_pct_min", 3.0))
+            hi = float(self.config.get("trail_pct_max", 12.0))
+
         if not bool(self.config.get("adaptive_trailing", True)):
             return fallback_pct
         try:
@@ -196,8 +208,6 @@ class ProtectionManager:
                 return fallback_pct
             atr_pct = atr / entry * 100.0
             mult = float(self.config.get("atr_trail_mult", 2.5))
-            lo = float(self.config.get("trail_pct_min", 3.0))
-            hi = float(self.config.get("trail_pct_max", 12.0))
             return max(lo, min(hi, mult * atr_pct))
         except Exception:
             return fallback_pct
