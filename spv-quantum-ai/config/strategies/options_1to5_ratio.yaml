@@ -1,8 +1,13 @@
 name: options_1to5_ratio
 version: 1.0.0
-description: Options buying strategy targeting a 1:5 Risk-to-Reward Ratio. Enter Call (CE) on momentum breakouts (EMA_9 > EMA_20 and RSI > 55) in a bullish regime. Exit at strict Stop Loss (RSI < 40) or 1:5 target (RSI >= 80).
+description: >-
+  Options buying (CALL side). Enter ATM CE on bullish momentum (EMA_9 > EMA_20,
+  RSI > 55) in a bullish regime, confirmed by the News employee not being
+  bearish. EXIT is handled entirely by the Safety Engine on the OPTION PREMIUM
+  (wide hidden stop-loss + volatility-adaptive trailing stop) — never on the
+  underlying's RSI. There are deliberately no exit_rules here.
 enabled: true
-timeframe: "15m"
+timeframe: "3m"
 symbols: ["NIFTY50", "BANKNIFTY"]
 trade_as: "ATM_CE"
 rules:
@@ -23,23 +28,10 @@ rules:
       key: EMP-NWS
       operator: '!='
       value: SELL
-exit_rules:
-  operator: OR
-  conditions:
-    - source: indicator
-      key: RSI
-      operator: '<'
-      value: 40.0  # Stop Loss (small risk)
-    - source: indicator
-      key: RSI
-      operator: '>='
-      value: 80.0  # 1:5 Take Profit (large reward)
 actions:
   matched:
     action: SIGNAL_BUY
     confidence: 90.0
-    reason: EMA_9 is above EMA_20, RSI > 55, and Market Regime is Bullish. Entering option trade.
-  exit:
-    action: SIGNAL_SELL
-    confidence: 90.0
-    reason: Exit triggered. Stop Loss (RSI < 40) or 1:5 Reward target (RSI >= 80) hit.
+    reason: >-
+      EMA_9 above EMA_20, RSI > 55, bullish regime, News not bearish. Buying the
+      ATM CE. Exit is premium-based (Safety Engine hidden SL + trailing).

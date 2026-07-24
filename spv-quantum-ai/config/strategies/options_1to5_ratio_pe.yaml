@@ -1,8 +1,13 @@
 name: options_1to5_ratio_pe
 version: 1.0.0
-description: Options buying (PUT side) targeting a 1:5 Risk-to-Reward Ratio. Enter Put (PE) on bearish momentum (EMA_9 < EMA_20 and RSI < 45) in a bearish regime. Exit at strict Stop Loss (RSI > 60) or 1:5 target (RSI <= 20). Mirror of options_1to5_ratio for the down side.
+description: >-
+  Options buying (PUT side). Enter ATM PE on bearish momentum (EMA_9 < EMA_20,
+  RSI < 45) in a bearish regime, confirmed by the News employee not being
+  bullish. EXIT is handled entirely by the Safety Engine on the OPTION PREMIUM
+  (wide hidden stop-loss + volatility-adaptive trailing stop) — never on the
+  underlying's RSI. There are deliberately no exit_rules here.
 enabled: true
-timeframe: "15m"
+timeframe: "3m"
 symbols: ["NIFTY50", "BANKNIFTY"]
 trade_as: "ATM_PE"
 rules:
@@ -23,23 +28,10 @@ rules:
       key: EMP-NWS
       operator: '!='
       value: BUY
-exit_rules:
-  operator: OR
-  conditions:
-    - source: indicator
-      key: RSI
-      operator: '>'
-      value: 60.0  # Stop Loss — market recovering, the put is losing
-    - source: indicator
-      key: RSI
-      operator: '<='
-      value: 20.0  # 1:5 Take Profit — deeply oversold, put target hit
 actions:
   matched:
     action: SIGNAL_BUY
     confidence: 90.0
-    reason: EMA_9 is below EMA_20, RSI < 45, and Market Regime is Bearish. Buying the ATM Put.
-  exit:
-    action: SIGNAL_SELL
-    confidence: 90.0
-    reason: Exit triggered. Stop Loss (RSI > 60) or 1:5 Reward target (RSI <= 20) hit.
+    reason: >-
+      EMA_9 below EMA_20, RSI < 45, bearish regime, News not bullish. Buying the
+      ATM PE. Exit is premium-based (Safety Engine hidden SL + trailing).

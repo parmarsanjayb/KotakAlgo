@@ -1,4 +1,5 @@
 import asyncio
+import re
 from typing import Dict, Any, Optional
 from core.logging import get_logger
 from brokers import broker_engine
@@ -41,7 +42,12 @@ class ProtectionManager:
             self.active_sls.pop(symbol, None)
             return
 
-        sl_pct = float(self.config.get("hidden_sl_pct", 2.0))
+        # Option premiums swing far more than cash — a 2% stop would be whipsawed
+        # instantly, so option contracts get a much wider premium stop. Detect an
+        # option by a strike digit immediately before CE/PE (…24200CE), so cash
+        # names that merely end in CE/PE (RELIANCE, BAJFINANCE) are NOT caught.
+        is_option = bool(re.search(r"\d(CE|PE)$", symbol.upper()))
+        sl_pct = float(self.config.get("option_sl_pct", 25.0)) if is_option else float(self.config.get("hidden_sl_pct", 2.0))
         if side.upper() in ("BUY", "LONG"):
             sl_price = entry_price * (1 - sl_pct / 100.0)
             highest_price = entry_price
