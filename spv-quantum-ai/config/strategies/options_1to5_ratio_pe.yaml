@@ -28,6 +28,10 @@ rules:
       key: EMP-NWS
       operator: '!='
       value: BUY
+    - source: employee          # OptionFlow (5-strike OI) must NOT be favouring calls
+      key: EMP-OFT
+      operator: '!='
+      value: "BUY CE"
 actions:
   matched:
     action: SIGNAL_BUY

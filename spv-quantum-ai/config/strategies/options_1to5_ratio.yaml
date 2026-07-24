@@ -28,6 +28,10 @@ rules:
       key: EMP-NWS
       operator: '!='
       value: SELL
+    - source: employee          # OptionFlow (5-strike OI) must NOT be favouring puts
+      key: EMP-OFT
+      operator: '!='
+      value: "BUY PE"
 actions:
   matched:
     action: SIGNAL_BUY
