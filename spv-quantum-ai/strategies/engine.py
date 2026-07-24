@@ -104,8 +104,14 @@ class StrategyEngine:
         responses: List[StrategyResponse] = []
 
         active_strategies = self.registry.get_active()
+        tf_str = timeframe.value if hasattr(timeframe, "value") else str(timeframe)
         for strategy in active_strategies:
             try:
+                # Only evaluate a strategy on the timeframe it was designed/validated
+                # for — daily swing strategies must not fire on 1m intraday noise.
+                # timeframe=None keeps the legacy "every timeframe" behaviour.
+                if getattr(strategy, "timeframe", None) and strategy.timeframe != tf_str:
+                    continue
                 matched = self.evaluator.evaluate_group(strategy.rules, context)
 
                 # Entry and exit conditions are designed to be mutually

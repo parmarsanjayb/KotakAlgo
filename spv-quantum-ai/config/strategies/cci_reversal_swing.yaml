@@ -6,6 +6,7 @@ description: >-
   NSE daily data: out-of-sample profit factor 1.83, positive in both regimes,
   ~20-day average hold. Uses indicators only (CCI entry, RSI exit).
 enabled: true
+timeframe: "1D"
 version: 1.0.0
 rules:
   operator: AND

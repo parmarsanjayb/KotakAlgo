@@ -2,6 +2,7 @@ name: options_1to5_ratio
 version: 1.0.0
 description: Options buying strategy targeting a 1:5 Risk-to-Reward Ratio. Enter Call (CE) on momentum breakouts (EMA_9 > EMA_20 and RSI > 55) in a bullish regime. Exit at strict Stop Loss (RSI < 40) or 1:5 target (RSI >= 80).
 enabled: true
+timeframe: "15m"
 rules:
   operator: AND
   conditions:

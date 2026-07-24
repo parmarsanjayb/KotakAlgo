@@ -20,6 +20,7 @@ class Strategy(BaseModel):
     version: str
     description: str = ""
     enabled: bool = True
+    timeframe: Optional[str] = None          # e.g. "1D", "1H", "15m". None = evaluate on every timeframe (legacy).
     rules: RuleGroup                          # entry condition (actions.matched)
     exit_rules: Optional[RuleGroup] = None     # exit condition (actions.exit), evaluated when rules didn't match
     actions: Dict[str, Any] = Field(default_factory=dict)
