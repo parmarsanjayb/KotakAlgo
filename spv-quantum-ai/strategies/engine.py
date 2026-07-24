@@ -269,12 +269,37 @@ class StrategyEngine:
                 "prev_close": tick.prev_close
             }
 
+        # Employee signals — expose each AI employee's latest recommendation for
+        # this symbol so strategy rules can use `source: employee` conditions
+        # (e.g. require the News employee not to contradict the trade direction).
+        employees_ctx: Dict[str, Any] = {}
+        try:
+            from employees.engine import employee_engine
+            emp_map = {
+                "EMP-VOL": employee_engine.volume_intelligence,
+                "EMP-OFT": employee_engine.option_flow,
+                "EMP-TRD": employee_engine.trend_intelligence,
+            }
+            for emp in getattr(employee_engine, "new_specialists", []):
+                code = getattr(emp, "employee_code", None)
+                if code:
+                    emp_map[code] = emp
+            alt = symbol.replace("50", "")  # NIFTY50 -> NIFTY for chain-keyed employees
+            for code, emp in emp_map.items():
+                results = getattr(emp, "latest_results", {}) or {}
+                res = results.get(symbol) or results.get(alt) or results.get("SYSTEM") or {}
+                if res:
+                    employees_ctx[code] = res
+        except Exception as e:
+            logger.debug(f"Could not gather employee signals for context: {e}")
+
         now = datetime.now(timezone.utc)
         current_context = {
             "indicators": curr_indicators,
             "market_regime": regime_val,
             "risk_status": risk_status_val,
             "market_data": mkt_dict,
+            "employees": employees_ctx,
             "time": now.strftime("%H:%M"),
             "session": market_data_manager.status.get_status().value
         }

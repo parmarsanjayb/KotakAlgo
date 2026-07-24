@@ -87,7 +87,18 @@ class ConditionEvaluator:
         elif source == "market_data":
             mkt = src_dict.get("market_data", {})
             return mkt.get(key) if key else None
-            
+
+        elif source == "employee":
+            # key = "EMP-NWS" -> that employee's recommendation (BUY/SELL/WAIT),
+            # or "EMP-OFT.confidence" -> a specific field of its latest result.
+            emps = src_dict.get("employees", {})
+            if not key:
+                return None
+            parts = key.split(".", 1)
+            res = emps.get(parts[0], {})
+            field = parts[1] if len(parts) > 1 else "recommendation"
+            return res.get(field) if isinstance(res, dict) else None
+
         elif source == "time":
             return src_dict.get("time")
             

@@ -19,6 +19,10 @@ rules:
     - source: market_regime
       operator: '=='
       value: TRENDING_BULLISH
+    - source: employee          # News employee must NOT be bearish to buy a call
+      key: EMP-NWS
+      operator: '!='
+      value: SELL
 exit_rules:
   operator: OR
   conditions:
