@@ -141,6 +141,33 @@ class StrategyEngine:
                         source_agent="strategy_engine",
                         payload=evt.model_dump()
                     ))
+
+                    # Bridge: turn an executable strategy signal into an
+                    # order_request so configured strategies actually TRADE.
+                    # Previously strategy_matched was published but nothing
+                    # consumed it, so strategies never executed — every trade
+                    # came from the employee/Chief path instead. This routes the
+                    # signal through the Risk Agent (same validation the Chief
+                    # path uses) and tags strategy_name so per-strategy P&L
+                    # attribution finally works.
+                    action = (resp.required_action or "").upper()
+                    side = "BUY" if action == "SIGNAL_BUY" else "SELL" if action == "SIGNAL_SELL" else None
+                    mkt = context.get("current", {}).get("market_data", {})
+                    ltp = float(mkt.get("ltp") or mkt.get("close") or 0.0)
+                    if side and ltp > 0:
+                        await event_bus.publish(EventModel(
+                            event_type="order_request",
+                            source_agent="strategy_engine",
+                            payload={
+                                "symbol": symbol,
+                                "side": side,
+                                "quantity": 10.0,
+                                "price": ltp,
+                                "type": "LIMIT",
+                                "strategy_name": strategy.name,
+                                "user_id": "spvquantam",
+                            }
+                        ))
                 else:
                     resp = StrategyResponse(
                         strategy_name=strategy.name,
